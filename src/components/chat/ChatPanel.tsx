@@ -13,7 +13,7 @@ function normalizeRole(role: ChatMessage["role"]): "user" | "assistant" {
 
 export default function ChatPanel({ onTool }: { onTool: (json: any) => void }) {
   const { t } = useTranslation("common")
-  const { messages, pendingText, streaming, send } = useAssistantStream({ onTool })
+  const { messages, streaming, send } = useAssistantStream({ onTool })
 
   const [text, setText] = useState("")
   const listRef = useRef<HTMLDivElement>(null)
@@ -25,12 +25,12 @@ export default function ChatPanel({ onTool }: { onTool: (json: any) => void }) {
     setText("")
   }
 
-  // Autoscroll en cada cambio visible
+  // Autoscroll en cada cambio
   useEffect(() => {
     const el = listRef.current
     if (!el) return
     el.scrollTo({ top: el.scrollHeight, behavior: "smooth" })
-  }, [messages, pendingText, streaming])
+  }, [messages, streaming])
 
   return (
     <div className="h-full flex flex-col">
@@ -42,13 +42,6 @@ export default function ChatPanel({ onTool }: { onTool: (json: any) => void }) {
             content={m.content}
           />
         ))}
-
-        {(streaming || pendingText) && (
-          <MessageBubble
-            role="assistant"
-            content={pendingText || t("loading")}
-          />
-        )}
       </div>
 
       <div className="p-3 border-t border-border/30 flex gap-2">
