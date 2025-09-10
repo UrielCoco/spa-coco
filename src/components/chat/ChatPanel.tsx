@@ -8,12 +8,51 @@ import { useAssistantStream } from "@/hooks/useAssistantStream"
 import type { ChatMessage } from "@/services/assistant"
 import { useTranslation } from "react-i18next"
 
-// GIFs locales (mismos que ya usas)
+// GIFs locales
 import textsBg from "./Texts.gif"
 import thinkingGif from "./Intelligence.gif"
 
 function normalizeRole(role: ChatMessage["role"]): "user" | "assistant" {
   return role === "system" ? "assistant" : role
+}
+
+/** Contenedor con fade-in/out correcto (cleanup devuelve void) */
+function FadeMount({
+  show,
+  duration = 220,
+  children,
+  className = "",
+}: {
+  show: boolean
+  duration?: number
+  children: React.ReactNode
+  className?: string
+}) {
+  const [render, setRender] = useState(show)
+
+  useEffect(() => {
+    let t: number | undefined
+    if (show) {
+      setRender(true)
+    } else {
+      t = window.setTimeout(() => setRender(false), duration)
+    }
+    return () => {
+      if (t !== undefined) {
+        window.clearTimeout(t)
+      }
+    }
+  }, [show, duration])
+
+  if (!render) return null
+  return (
+    <div
+      className={`transition-opacity duration-200 ${show ? "opacity-100" : "opacity-0"} ${className}`}
+      aria-hidden={!show}
+    >
+      {children}
+    </div>
+  )
 }
 
 export default function ChatPanel({ onTool }: { onTool: (json: any) => void }) {
@@ -22,28 +61,25 @@ export default function ChatPanel({ onTool }: { onTool: (json: any) => void }) {
 
   const [text, setText] = useState("")
   const listRef = useRef<HTMLDivElement>(null)
+  const endRef = useRef<HTMLDivElement>(null) // ancla para autoscroll
 
   const handleSend = () => {
     const trimmed = text.trim()
     if (!trimmed) return
-    // limpiar inmediato (tu petición #2)
-    setText("")
+    setText("") // limpiar inmediato
     void send(trimmed)
   }
 
-  // autoscroll en cada cambio
+  // Autoscroll siempre al final (incluye 3 puntos y cualquier delta)
   useEffect(() => {
-    const el = listRef.current
-    if (!el) return
-    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" })
+    endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
   }, [messages, streaming])
 
   const hasMessages = messages.length > 0
 
   return (
-    // min-h-0 asegura que el área de mensajes pueda overflow Scroll
     <div className="relative h-full min-h-0 flex flex-col">
-      {/* Fondo con GIF cuando no hay mensajes, centrado y limitado al 60% (tu petición #5) */}
+      {/* Fondo con GIF (máx 60% del panel) */}
       {!hasMessages && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
           <img
@@ -55,19 +91,7 @@ export default function ChatPanel({ onTool }: { onTool: (json: any) => void }) {
         </div>
       )}
 
-      {/* Overlay con Intelligence.gif mientras piensa */}
-      {streaming && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-16 flex justify-center z-10">
-          <img
-            src={thinkingGif}
-            alt="Thinking..."
-            className="h-16 opacity-85 animate-fade-in-up"
-            loading="lazy"
-          />
-        </div>
-      )}
-
-      {/* Lista de mensajes: hace scroll, el input queda sticky */}
+      {/* Lista de mensajes (scrolleable) */}
       <div ref={listRef} className="relative flex-1 min-h-0 overflow-auto p-4 space-y-3">
         {messages.map((m, idx) => (
           <MessageBubble
@@ -77,10 +101,21 @@ export default function ChatPanel({ onTool }: { onTool: (json: any) => void }) {
           />
         ))}
         {streaming && <TypingBubble />}
+        <div ref={endRef} />
       </div>
 
-      {/* Input siempre visible con sticky bottom (tu petición #1) */}
-      <div className="sticky bottom-0 z-20 bg-background/90 backdrop-blur p-3 border-t border-border/30 flex gap-2 items-center">
+      {/* Thinking GIF arriba del form; fade in/out */}
+      <FadeMount show={streaming} className="pointer-events-none absolute inset-x-0 z-50 bottom-[90px] flex justify-center">
+        <img
+          src={thinkingGif}
+          alt="Thinking..."
+          className="h-16 opacity-90"
+          loading="lazy"
+        />
+      </FadeMount>
+
+      {/* Input sticky siempre visible */}
+      <div className="sticky bottom-0 z-40 bg-background/90 backdrop-blur p-3 border-t border-border/30 flex gap-2 items-center">
         <Input
           aria-label={t("typeMessage")}
           placeholder={t("typeMessage")}
@@ -93,12 +128,12 @@ export default function ChatPanel({ onTool }: { onTool: (json: any) => void }) {
             }
           }}
           className="input-gold flex-1"
-          disabled={streaming} // tu petición #3
+          disabled={streaming}
         />
         <Button
           className="btn-gold disabled:opacity-50 disabled:cursor-not-allowed"
           onClick={handleSend}
-          disabled={streaming || text.trim().length === 0} // tu petición #3
+          disabled={streaming || text.trim().length === 0}
           aria-busy={streaming}
         >
           {streaming ? t("sending") ?? "Enviando…" : t("send")}
