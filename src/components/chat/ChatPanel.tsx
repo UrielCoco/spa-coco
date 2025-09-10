@@ -8,7 +8,7 @@ import { useAssistantStream } from "@/hooks/useAssistantStream"
 import type { ChatMessage } from "@/services/assistant"
 import { useTranslation } from "react-i18next"
 
-// Importa tus GIFs locales (colócalos junto a este archivo)
+// GIFs locales (mismos que ya usas)
 import textsBg from "./Texts.gif"
 import thinkingGif from "./Intelligence.gif"
 
@@ -26,13 +26,12 @@ export default function ChatPanel({ onTool }: { onTool: (json: any) => void }) {
   const handleSend = () => {
     const trimmed = text.trim()
     if (!trimmed) return
-    // 1) Limpia inmediato
+    // limpiar inmediato (tu petición #2)
     setText("")
-    // 2) Dispara el stream (no esperamos)
     void send(trimmed)
   }
 
-  // Autoscroll en cada cambio
+  // autoscroll en cada cambio
   useEffect(() => {
     const el = listRef.current
     if (!el) return
@@ -42,15 +41,15 @@ export default function ChatPanel({ onTool }: { onTool: (json: any) => void }) {
   const hasMessages = messages.length > 0
 
   return (
-    <div className="relative h-full flex flex-col">
-      {/* Fondo con GIF cuando no hay mensajes */}
+    // min-h-0 asegura que el área de mensajes pueda overflow Scroll
+    <div className="relative h-full min-h-0 flex flex-col">
+      {/* Fondo con GIF cuando no hay mensajes, centrado y limitado al 60% (tu petición #5) */}
       {!hasMessages && (
-        <div className="pointer-events-none absolute inset-0 opacity-60">
-          {/* usando img para que haga cover sin problemas */}
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
           <img
             src={textsBg}
             alt=""
-            className="w-full h-full object-cover"
+            className="opacity-60 max-w-[60%] max-h-[60%] w-auto h-auto object-contain"
             loading="lazy"
           />
         </div>
@@ -68,7 +67,8 @@ export default function ChatPanel({ onTool }: { onTool: (json: any) => void }) {
         </div>
       )}
 
-      <div ref={listRef} className="relative flex-1 overflow-auto p-4 space-y-3">
+      {/* Lista de mensajes: hace scroll, el input queda sticky */}
+      <div ref={listRef} className="relative flex-1 min-h-0 overflow-auto p-4 space-y-3">
         {messages.map((m, idx) => (
           <MessageBubble
             key={idx}
@@ -76,11 +76,11 @@ export default function ChatPanel({ onTool }: { onTool: (json: any) => void }) {
             content={m.content}
           />
         ))}
-        {/* Burbujita de 3 puntos cuando está pensando */}
         {streaming && <TypingBubble />}
       </div>
 
-      <div className="p-3 border-t border-border/30 flex gap-2 items-center">
+      {/* Input siempre visible con sticky bottom (tu petición #1) */}
+      <div className="sticky bottom-0 z-20 bg-background/90 backdrop-blur p-3 border-t border-border/30 flex gap-2 items-center">
         <Input
           aria-label={t("typeMessage")}
           placeholder={t("typeMessage")}
@@ -93,12 +93,12 @@ export default function ChatPanel({ onTool }: { onTool: (json: any) => void }) {
             }
           }}
           className="input-gold flex-1"
-          disabled={streaming}
+          disabled={streaming} // tu petición #3
         />
         <Button
           className="btn-gold disabled:opacity-50 disabled:cursor-not-allowed"
           onClick={handleSend}
-          disabled={streaming || text.trim().length === 0}
+          disabled={streaming || text.trim().length === 0} // tu petición #3
           aria-busy={streaming}
         >
           {streaming ? t("sending") ?? "Enviando…" : t("send")}
