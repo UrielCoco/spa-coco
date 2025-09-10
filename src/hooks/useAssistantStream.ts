@@ -12,22 +12,21 @@ export function useAssistantStream({ onTool }: HookArgs = {}) {
   const [streaming, setStreaming] = useState(false)
 
   const abortRef = useRef<null | (() => void)>(null)
-  const bufferRef = useRef<string>("")          // acumula tokens del mensaje actual
-  const hasBufferRef = useRef<boolean>(false)   // estamos armando un mensaje?
+  const bufferRef = useRef<string>("")
 
   const send = useCallback(
     async (text: string) => {
       const trimmed = text.trim()
       if (!trimmed) return
 
-      // agrega mensaje de usuario visible
+      // agrega el mensaje de usuario visible
       setMessages(prev => [...prev, { role: "user", content: trimmed }])
 
+      // inicia estado de “pensando”
       setStreaming(true)
       bufferRef.current = ""
-      hasBufferRef.current = false
 
-      // snapshot (evita race de setState)
+      // snapshot del historial (evita race con setState async)
       const snapshot: ChatMessage[] = [
         ...messages,
         { role: "user", content: trimmed },
@@ -41,14 +40,12 @@ export function useAssistantStream({ onTool }: HookArgs = {}) {
 
         switch (type) {
           case "token": {
-            // sólo bufferizamos, NO renderizamos
-            hasBufferRef.current = true
             bufferRef.current += String(data)
             break
           }
           case "final": {
             const finalText =
-              typeof data === "string" && data.length > 0
+              typeof data === "string" && data.trim().length > 0
                 ? data
                 : bufferRef.current
 
@@ -56,9 +53,8 @@ export function useAssistantStream({ onTool }: HookArgs = {}) {
               setMessages(prev => [...prev, { role: "assistant", content: finalText }])
             }
 
-            // resetea para permitir otro mensaje en mismo stream
             bufferRef.current = ""
-            hasBufferRef.current = false
+            setStreaming(false) // termina esta respuesta; si llega otro token, volverá a true en send siguiente
             break
           }
           case "tool": {
@@ -73,7 +69,6 @@ export function useAssistantStream({ onTool }: HookArgs = {}) {
         }
       })
 
-      setStreaming(false)
       return abortRef.current
     },
     [messages, onTool]
@@ -83,11 +78,10 @@ export function useAssistantStream({ onTool }: HookArgs = {}) {
     abortRef.current?.()
     abortRef.current = null
     bufferRef.current = ""
-    hasBufferRef.current = false
     setStreaming(false)
   }, [])
 
-  // por compatibilidad si necesitas setear mensajes externamente
+  // Por si necesitas reemplazar todo el historial
   const replaceMessages = useCallback((next: ChatMessage[]) => {
     setMessages(next)
   }, [])
