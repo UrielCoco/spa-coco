@@ -55,12 +55,14 @@ function FadeMount({
   )
 }
 
+// Alto (aprox) del footer sticky para reservar espacio en el scroll
+const FOOTER_H = 88 // px
+
 export default function ChatPanel({ onTool }: { onTool: (json: any) => void }) {
   const { t } = useTranslation("common")
   const { messages, streaming, send } = useAssistantStream({ onTool })
 
   const [text, setText] = useState("")
-  const listRef = useRef<HTMLDivElement>(null)
   const endRef = useRef<HTMLDivElement>(null) // ancla para autoscroll
 
   const handleSend = () => {
@@ -91,8 +93,11 @@ export default function ChatPanel({ onTool }: { onTool: (json: any) => void }) {
         </div>
       )}
 
-      {/* Lista de mensajes (scrolleable) */}
-      <div ref={listRef} className="relative flex-1 min-h-0 overflow-auto p-4 space-y-3">
+      {/* Lista de mensajes (scrolleable) con padding inferior = alto del footer */}
+      <div
+        className="relative flex-1 min-h-0 overflow-auto p-4 space-y-3"
+        style={{ paddingBottom: FOOTER_H }}
+      >
         {messages.map((m, idx) => (
           <MessageBubble
             key={idx}
@@ -104,12 +109,16 @@ export default function ChatPanel({ onTool }: { onTool: (json: any) => void }) {
         <div ref={endRef} />
       </div>
 
-      {/* Thinking GIF arriba del form; fade in/out */}
-      <FadeMount show={streaming} className="pointer-events-none absolute inset-x-0 z-50 bottom-[90px] flex justify-center">
+      {/* Thinking GIF: arriba del form; fade in/out y posicionado con el mismo offset del footer */}
+      <FadeMount
+        show={streaming}
+        className="pointer-events-none absolute inset-x-0 z-50 flex justify-center"
+      >
         <img
           src={thinkingGif}
           alt="Thinking..."
           className="h-16 opacity-90"
+          style={{ position: "absolute", bottom: FOOTER_H + 8 }}
           loading="lazy"
         />
       </FadeMount>
