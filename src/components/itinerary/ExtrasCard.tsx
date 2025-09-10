@@ -1,22 +1,28 @@
-import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
-import { useItinerary } from '@/store/itinerary.store'
-import { useTranslation } from 'react-i18next'
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { useItinerary } from "@/store/itinerary.store"
 
 export default function ExtrasCard() {
-  const { t } = useTranslation('itinerary')
-  const it = useItinerary(s => s.itinerary)
+  const extras = useItinerary(s => s.itinerary.extras || [])
   return (
-    <Card className="print-card">
-      <CardHeader><CardTitle>{it.labels?.extras || t('extras')}</CardTitle></CardHeader>
-      <CardContent>
-        <ul className="text-sm space-y-2">
-          {(it.extras||[]).map((ex, idx) => (
-            <li key={idx} className="flex justify-between">
-              <div>{ex.title}</div>
-              {ex.price ? <div>${ex.price}</div> : null}
-            </li>
-          ))}
-        </ul>
+    <Card>
+      <CardHeader>
+        <CardTitle>Extras</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {extras.length === 0 && <p className="opacity-70">No hay servicios adicionales aún.</p>}
+        {extras.map((e, i) => (
+          <div key={i} className="rounded-xl border border-black/10 p-3">
+            <div className="text-sm font-semibold capitalize">{e.type.replace("_", " ")}</div>
+            <div className="font-medium">{e.title}</div>
+            {e.description && <p className="text-sm mt-1">{e.description}</p>}
+            <div className="text-sm opacity-70 mt-1">
+              {e.price ? `Precio: ${e.price}` : null}
+              {e.schedule?.date ? ` · ${e.schedule.date}` : null}
+              {e.schedule?.time ? ` ${e.schedule.time}` : null}
+              {e.location?.name ? ` · ${e.location.name}` : null}
+            </div>
+          </div>
+        ))}
       </CardContent>
     </Card>
   )

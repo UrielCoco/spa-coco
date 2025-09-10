@@ -1,42 +1,81 @@
-import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
-import { useItinerary } from '@/store/itinerary.store'
-import { useTranslation } from 'react-i18next'
-import { Button } from '@/components/common/Button'
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { useItinerary } from "@/store/itinerary.store"
+import { ChevronLeft, ChevronRight, Clock, MapPin } from "lucide-react"
+import { useRef } from "react"
 
 export default function DayPlanCard() {
-  const { t } = useTranslation('itinerary')
-  const it = useItinerary(s => s.itinerary)
-  const replace = useItinerary(s => s.replace)
+  const days = useItinerary(s => s.itinerary.days || [])
+  const scroller = useRef<HTMLDivElement>(null)
 
-  const addDay = () => {
-    const nextIndex = (it.days?.length || 0) + 1
-    replace({ ...it, days: [...(it.days||[]), { dayIndex: nextIndex, activities: [] }] })
-  }
+  const scrollBy = (dx: number) => scroller.current?.scrollBy({ left: dx, behavior: "smooth" })
 
   return (
-    <Card className="print-card">
-      <CardHeader className="flex items-center justify-between">
-        <CardTitle>{it.labels?.days || t('days')}</CardTitle>
-        <Button variant="outline" onClick={addDay}>+ Day</Button>
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <CardTitle>Días</CardTitle>
+        <div className="flex gap-2">
+          <button className="rounded-full p-2 border border-black/10 hover:bg-black/5" onClick={() => scrollBy(-320)} aria-label="Anterior">
+            <ChevronLeft />
+          </button>
+          <button className="rounded-full p-2 border border-black/10 hover:bg-black/5" onClick={() => scrollBy(320)} aria-label="Siguiente">
+            <ChevronRight />
+          </button>
+        </div>
       </CardHeader>
-      <CardContent className="space-y-4">
-        {(it.days||[]).map((d, idx) => (
-          <div key={idx} className="rounded-2xl border p-3">
-            <div className="font-medium mb-2">Day {d.dayIndex} — {d.city||''} {d.country||''}</div>
-            <ul className="space-y-2">
-              {(d.activities||[]).map((a, i) => (
-                <li key={i} className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-medium">{a.time ? a.time + ' · ' : ''}{a.title}</div>
-                    {a.description && <div className="text-xs text-gray-600">{a.description}</div>}
-                  </div>
-                  <div className="text-xs text-gray-500">{a.tag}</div>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ))}
+      <CardContent>
+        <div ref={scroller} className="flex gap-4 overflow-x-auto pb-1 snap-x">
+          {days.map((d, i) => (
+            <DayCol key={i} day={d} />
+          ))}
+        </div>
       </CardContent>
     </Card>
   )
+}
+
+function DayCol({ day }: { day: any }) {
+  const acts = [...(day.activities || [])].sort(sortByTime)
+
+  return (
+    <div className="snap-start min-w-[280px] max-w-[280px] rounded-2xl border border-black/10 bg-muted/30">
+      <div className="px-3 py-2 border-b border-black/10">
+        <div className="text-xs opacity-60">Día {day.dayIndex}{day.date ? ` · ${day.date}` : ""}</div>
+        <div className="text-sm font-medium">{[day.city, day.country].filter(Boolean).join(", ") || "—"}</div>
+      </div>
+      <div className="max-h-[260px] overflow-auto p-3 space-y-2">
+        {acts.length === 0 ? (
+          <div className="opacity-60 text-sm">Sin actividades</div>
+        ) : acts.map((a, idx) => <ActivityItem key={idx} a={a} />)}
+      </div>
+    </div>
+  )
+}
+
+function ActivityItem({ a }: { a: any }) {
+  const when = [a.time, a.durationMins ? `· ${a.durationMins}m` : null].filter(Boolean).join(" ")
+  const place = a?.location?.name || a?.location?.address
+  return (
+    <div className="rounded-xl bg-white p-3 shadow-soft border border-black/10">
+      <div className="text-sm font-semibold">{a.title}</div>
+      <div className="text-xs opacity-70 flex items-center gap-2">
+        <Clock size={14} /> {when || "—"}
+      </div>
+      <div className="text-xs opacity-70 flex items-center gap-2">
+        <MapPin size={14} /> {place || "—"}
+      </div>
+      {a.description && <p className="mt-1 text-sm">{a.description}</p>}
+      {a.tag && <span className="inline-block mt-2 text-xs px-2 py-0.5 rounded-full bg-gold-100 text-black border border-gold-300">{a.tag}</span>}
+    </div>
+  )
+}
+
+function sortByTime(a: any, b: any) {
+  const ta = parseTime(a?.time)
+  const tb = parseTime(b?.time)
+  return ta - tb
+}
+function parseTime(t?: string) {
+  if (!t || !/^\d{1,2}:\d{2}$/.test(t)) return 9999
+  const [h, m] = t.split(":").map(Number)
+  return h * 60 + m
 }
