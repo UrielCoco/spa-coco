@@ -5,19 +5,27 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        background: 'hsl(0 0% 100%)',
-        foreground: 'hsl(222 47% 11%)',
-        card: 'hsl(0 0% 100%)',
-        muted: 'hsl(210 40% 96%)',
-        border: 'hsl(214 32% 91%)',
-        primary: 'hsl(221 83% 53%)',
-      },
-      borderRadius: {
-        '2xl': '1rem',
+        // Paleta dorada
+        gold: {
+          50:  "#FFF9E6",
+          100: "#FDEFC2",
+          200: "#F6E190",
+          300: "#E9C95B",
+          400: "#DDB841",
+          500: "#D4AF37", // principal
+          600: "#C6A233",
+          700: "#A8832B",
+          800: "#7D6120",
+          900: "#5C4618",
+        },
       },
       boxShadow: {
-        soft: '0 4px 16px rgba(0,0,0,0.08)',
-      }
+        soft: "0 1px 2px rgba(0,0,0,.04), 0 8px 24px rgba(0,0,0,.10)",
+        gold: "0 1px 2px rgba(0,0,0,.04), 0 8px 24px rgba(212,175,55,.25)",
+      },
+      borderRadius: {
+        "2xl": "1rem",
+      },
     },
   },
   plugins: [],
