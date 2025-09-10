@@ -2,89 +2,67 @@
 import { useCallback, useRef, useState } from "react"
 import type { ChatMessage } from "@/services/assistant"
 import { startStream } from "@/services/assistant"
+import { mergeItinerary, extractLabels } from "@/services/parsers"
+import { useItinerary } from "@/store/itinerary.store"
 
-type HookArgs = { onTool?: (payload: any) => void }
+type Args = { onTool?: (json: any) => void }
 
-const LOG = (import.meta.env.VITE_LOG_SSE ?? "0") !== "0"
-
-export function useAssistantStream({ onTool }: HookArgs = {}) {
+export function useAssistantStream({ onTool }: Args = {}) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [streaming, setStreaming] = useState(false)
-
-  const abortRef = useRef<null | (() => void)>(null)
-  const bufferRef = useRef<string>("")
+  const abortRef = useRef<AbortController | null>(null)
 
   const send = useCallback(
     async (text: string) => {
-      const trimmed = text.trim()
-      if (!trimmed) return
-
-      // agrega el mensaje de usuario visible
-      setMessages(prev => [...prev, { role: "user", content: trimmed }])
-
-      // inicia estado de “pensando”
+      const next: ChatMessage[] = [...messages, { role: "user", content: text }]
+      setMessages(next)
       setStreaming(true)
-      bufferRef.current = ""
 
-      // snapshot del historial (evita race con setState async)
-      const snapshot: ChatMessage[] = [
-        ...messages,
-        { role: "user", content: trimmed },
-      ]
+      const controller = new AbortController()
+      abortRef.current = controller
 
-      abortRef.current = await startStream(snapshot, (type, data) => {
-        if (LOG) {
-          const len = typeof data === "string" ? data.length : JSON.stringify(data).length
-          console.log("[CHAT]", type, "len:", len)
-        }
-
-        switch (type) {
-          case "token": {
-            bufferRef.current += String(data)
-            break
-          }
-          case "final": {
-            const finalText =
-              typeof data === "string" && data.trim().length > 0
-                ? data
-                : bufferRef.current
-
-            if (finalText && finalText.trim().length > 0) {
-              setMessages(prev => [...prev, { role: "assistant", content: finalText }])
+      await startStream(next, {
+        signal: controller.signal,
+        onEvent: (evt, payload) => {
+          if (evt === "delta" || evt === "token" || evt === "message") {
+            // streaming del assistant
+            setMessages((curr) => {
+              const last = curr[curr.length - 1]
+              if (!last || last.role !== "assistant") {
+                return [...curr, { role: "assistant", content: String(payload ?? "") }]
+              }
+              return [...curr.slice(0, -1), { ...last, content: last.content + String(payload ?? "") }]
+            })
+          } else if (evt === "tool") {
+            try {
+              const partial = typeof payload === "string" ? JSON.parse(payload) : (payload as any)
+              // 1) merge persistente
+              mergeItinerary(partial)
+              // 2) labels con prioridad
+              const labels = extractLabels(partial)
+              if (labels) {
+                useItinerary.getState().mergeItinerary({ labels })
+              }
+              onTool?.(partial)
+            } catch (e) {
+              console.error("tool parse error", e)
             }
-
-            bufferRef.current = ""
-            setStreaming(false) // termina esta respuesta; si llega otro token, volverá a true en send siguiente
-            break
-          }
-          case "tool": {
-            onTool?.(data)
-            break
-          }
-          case "error": {
-            console.error("[CHAT error]", data)
+          } else if (evt === "final" || evt === "done") {
             setStreaming(false)
-            break
+          } else if (evt === "error") {
+            console.error("[stream error]", payload)
+            setStreaming(false)
           }
-        }
+        },
+        onError: () => {
+          setStreaming(false)
+        },
       })
-
-      return abortRef.current
     },
     [messages, onTool]
   )
 
-  const abort = useCallback(() => {
-    abortRef.current?.()
-    abortRef.current = null
-    bufferRef.current = ""
-    setStreaming(false)
-  }, [])
+  const abort = () => abortRef.current?.abort()
 
-  // Por si necesitas reemplazar todo el historial
-  const replaceMessages = useCallback((next: ChatMessage[]) => {
-    setMessages(next)
-  }, [])
-
-  return { messages, streaming, send, abort, setMessages: replaceMessages }
+  return { messages, setMessages, send, abort, streaming } as const
 }
