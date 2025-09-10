@@ -28,6 +28,7 @@
 
     /* Dorado (para ring/detalles) ≈ #D4AF37 */
     --ring: 46 65% 52%;
+    --border: 46 65% 52%;
     --accent: 46 65% 95%;
     --accent-foreground: 0 0% 7%;
 
@@ -91,18 +92,25 @@
 
 /* ======== Component overrides suaves (sin tocar lógica) ======== */
 @layer components {
-  /* Cards de shadcn suelen traer 'border'; aquí nos aseguramos de sombra y sin borde */
-  .shadcn-card {
-    @apply bg-card text-card-foreground shadow-soft rounded-2xl border-0;
+  /* Tarjetas / paneles con borde dorado suave */
+  .shadcn-card, .panel, .sheet {
+    @apply bg-card text-card-foreground rounded-2xl shadow-soft
+           border border-border/30; /* << dorado sutil */
   }
-
+  /* Input con borde dorado */
+  .input-gold {
+    @apply rounded-2xl px-4 py-2 bg-secondary/60
+           border border-border/30
+           focus:border-border focus:ring-2 focus:ring-[hsl(var(--ring))]/35;
+  }
+  
   /* Inputs/Textareas limpios (sin borde, con fondo leve y ring al foco) */
   .input-clean {
     @apply border-0 bg-secondary/60 shadow-inner rounded-2xl px-4 py-2
            focus:border-0 focus:ring-2 focus:ring-[hsl(var(--ring))]/35;
   }
 
-  /* Botón dorado opcional */
+  /* Botón dorado relleno */
   .btn-gold {
     @apply bg-gold-500 text-black shadow-gold hover:bg-gold-600 active:bg-gold-700
            rounded-2xl px-4 py-2 font-medium transition-colors;
@@ -110,5 +118,16 @@
 
   .btn-ghost {
     @apply bg-transparent text-foreground hover:bg-accent rounded-2xl;
+  }
+
+  /* Botón dorado contorno */
+  .btn-gold-outline {
+    @apply bg-transparent text-foreground rounded-2xl px-4 py-2 font-medium
+           border border-border/40 hover:bg-accent/40;
+  }
+
+  /* Separador fino dorado opcional */
+  .gold-divider { 
+    background: linear-gradient(90deg,transparent,rgba(212,175,55,.6),transparent); height:1px; 
   }
 }
