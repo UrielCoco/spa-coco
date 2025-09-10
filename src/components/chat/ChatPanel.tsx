@@ -1,54 +1,73 @@
-import { useRef, useState } from 'react'
-import { Button } from '@/components/common/Button'
-import { Input } from '@/components/ui/input'
-import MessageBubble from './MessageBubble'
-import { useAssistantStream } from '@/hooks/useAssistantStream'
-import { useTranslation } from 'react-i18next'
+// src/components/chat/ChatPanel.tsx
+import { useEffect, useRef, useState } from "react"
+import { Button } from "@/components/common/Button"
+import { Input } from "@/components/ui/input"
+import MessageBubble from "./MessageBubble"
+import { useAssistantStream } from "@/hooks/useAssistantStream"
+import type { ChatMessage } from "@/services/assistant"
+import { useTranslation } from "react-i18next"
 
-export default function ChatPanel({ onTool }: { onTool: (json: any)=>void }) {
-  const { t } = useTranslation('common')
-  const { messages, pendingText, streaming, send, setMessages } = useAssistantStream()
-  const [text, setText] = useState('')
+function normalizeRole(role: ChatMessage["role"]): "user" | "assistant" {
+  return role === "system" ? "assistant" : role
+}
+
+export default function ChatPanel({ onTool }: { onTool: (json: any) => void }) {
+  const { t } = useTranslation("common")
+  const { messages, pendingText, streaming, send } = useAssistantStream({ onTool })
+
+  const [text, setText] = useState("")
   const listRef = useRef<HTMLDivElement>(null)
 
   const handleSend = async () => {
     const trimmed = text.trim()
     if (!trimmed) return
-    // special: /demo triggers tool-merge after stream (handled by mock automatically)
     await send(trimmed)
-    setText('')
-    setTimeout(() => { listRef.current?.scrollTo({ top: 999999, behavior: 'smooth' }) }, 50)
+    setText("")
   }
 
-  // crude parser to detect tool-call textual marker and emit
-  const effectiveMessages = messages.map(m => {
-    if (m.content.startsWith('\n[tool-call]')) {
-      try {
-        const json = JSON.parse(m.content.replace('\n[tool-call]\n', ''))
-        onTool(json)
-        return { ...m, content: '[tool] Ready to apply' }
-      } catch { return m }
-    }
-    return m
-  })
+  // Autoscroll en cada cambio visible
+  useEffect(() => {
+    const el = listRef.current
+    if (!el) return
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" })
+  }, [messages, pendingText, streaming])
 
   return (
     <div className="h-full flex flex-col">
-      <div ref={listRef} className="flex-1 overflow-auto p-4">
-        {effectiveMessages.map((m, idx) => <MessageBubble key={idx} role={m.role} content={m.content} />)}
-        {streaming || pendingText ? <MessageBubble role="assistant" content={pendingText || t('loading')} /> : null}
+      <div ref={listRef} className="flex-1 overflow-auto p-4 space-y-3">
+        {messages.map((m, idx) => (
+          <MessageBubble
+            key={idx}
+            role={normalizeRole(m.role)}
+            content={m.content}
+          />
+        ))}
+
+        {(streaming || pendingText) && (
+          <MessageBubble
+            role="assistant"
+            content={pendingText || t("loading")}
+          />
+        )}
       </div>
-      <div className="p-3 border-t flex gap-2">
+
+      <div className="p-3 border-t border-border/30 flex gap-2">
         <Input
-          aria-label={t('typeMessage')}
-          placeholder={t('typeMessage')}
+          aria-label={t("typeMessage")}
+          placeholder={t("typeMessage")}
           value={text}
-          onChange={e => setText(e.target.value)}
+          onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() }
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault()
+              handleSend()
+            }
           }}
+          className="input-gold flex-1"
         />
-        <Button onClick={handleSend}>{t('send')}</Button>
+        <Button className="btn-gold" onClick={handleSend}>
+          {t("send")}
+        </Button>
       </div>
     </div>
   )

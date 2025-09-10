@@ -1,71 +1,149 @@
 // src/hooks/useAssistantStream.ts
-import { useRef, useState } from 'react'
-import type { ChatMessage } from '@/services/assistant'
-import { startStream } from '@/services/assistant'
+import { useCallback, useRef, useState } from "react"
+import type { ChatMessage } from "@/services/assistant"
+import { startStream } from "@/services/assistant"
 
-const SYSTEM_PROMPT = `
-Eres un asistente de viajes. Responde al usuario y cuando tengas datos del itinerario
-emite un evento SSE "itinerary" con JSON Partial<Itinerary> (labels opcional). Solo JSON en "itinerary".
-`
+type HookArgs = {
+  onTool?: (payload: any) => void
+}
 
-export function useAssistantStream() {
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    { role: 'system', content: SYSTEM_PROMPT },
-  ])
+const LOG = (import.meta.env.VITE_LOG_SSE ?? "0") !== "0"
+
+export function useAssistantStream(args: HookArgs = {}) {
+  const { onTool } = args
+
+  // Mensajes completos que renderiza el chat
+  const [messages, setMessagesState] = useState<ChatMessage[]>([])
+
+  // Texto temporal mientras llegan tokens del assistant para el mensaje EN CURSO
+  const [pendingText, setPendingText] = useState("")
+
+  // Flag UI
   const [streaming, setStreaming] = useState(false)
-  const [pendingText, setPendingText] = useState('')
 
-  const bufferRef = useRef<string>('')
-  const flushTimerRef = useRef<number | null>(null)
-  const cancelRef = useRef<(() => void) | null>(null)
+  // Control de stream actual
+  const abortRef = useRef<null | (() => void)>(null)
 
-  const startFlush = () => {
-    if (flushTimerRef.current) return
-    flushTimerRef.current = window.setInterval(() => {
-      if (bufferRef.current) {
-        setPendingText(prev => prev + bufferRef.current)
-        bufferRef.current = ''
-      }
-    }, 60) as unknown as number
-  }
-  const stopFlush = () => {
-    if (flushTimerRef.current) {
-      clearInterval(flushTimerRef.current)
-      flushTimerRef.current = null
-    }
-  }
+  // Índice del mensaje del assistant que estamos rellenando con tokens
+  const streamIdxRef = useRef<number | null>(null)
 
-  const send = async (content: string) => {
-    cancelRef.current?.()
-    const payload = [...messages, { role: 'user' as const, content }]
-    setMessages(payload)
-    setPendingText('')
-    setStreaming(true)
-    bufferRef.current = ''
-    startFlush()
+  /** Setter compatible con el patrón que usas en tu ChatPanel */
+  const setMessages = useCallback(
+    (updater: (prev: ChatMessage[]) => ChatMessage[]) => {
+      setMessagesState((prev) => updater(prev))
+    },
+    []
+  )
 
-    cancelRef.current = await startStream(payload, (type, data) => {
-      if (type === 'token') {
-        bufferRef.current += String(data)
-      } else if (type === 'tool') {
-        stopFlush()
-        setMessages(ms => [...ms, { role: 'assistant', content: (pendingText + bufferRef.current).trim() }])
-        bufferRef.current = ''
-        setPendingText('')
-        const toolMsg = { role: 'assistant' as const, content: `\n[tool-call]\n` + JSON.stringify(data, null, 2) }
-        setMessages(ms => [...ms, toolMsg])
-        setStreaming(false)
-      } else if (type === 'final') {
-        stopFlush()
-        if (bufferRef.current || pendingText) {
-          setMessages(ms => [...ms, { role: 'assistant', content: (pendingText + bufferRef.current).trim() }])
-          bufferRef.current = ''
-          setPendingText('')
-        }
-        setStreaming(false)
-      }
+  /** Crea (si hace falta) el placeholder del assistant y devuelve su índice */
+  const ensureAssistantPlaceholder = useCallback(() => {
+    if (streamIdxRef.current != null) return streamIdxRef.current
+    setMessagesState((prev) => {
+      const idx = prev.length
+      streamIdxRef.current = idx
+      return [...prev, { role: "assistant", content: "" }]
     })
-  }
+    return streamIdxRef.current!
+  }, [])
 
-  return { messages, streaming, pendingText, send, setMessages }
+  /** Actualiza el contenido del assistant (append tokens) */
+  const updateAssistant = useCallback((nextText: string) => {
+    const idx = ensureAssistantPlaceholder()
+    setMessagesState((prev) => {
+      const out = [...prev]
+      out[idx] = { role: "assistant", content: nextText }
+      return out
+    })
+  }, [ensureAssistantPlaceholder])
+
+  /** Cierra el mensaje en curso (al recibir `final`) y permite que llegue otro */
+  const closeAssistant = useCallback((finalText: string) => {
+    const idx = streamIdxRef.current
+    if (idx == null) {
+      setMessagesState((prev) => [...prev, { role: "assistant", content: finalText }])
+    } else {
+      setMessagesState((prev) => {
+        const out = [...prev]
+        out[idx] = { role: "assistant", content: finalText }
+        return out
+      })
+    }
+    streamIdxRef.current = null
+    setPendingText("")
+  }, [])
+
+  /** Envía texto del usuario y arranca el stream */
+  const send = useCallback(
+    async (text: string) => {
+      const trimmed = text.trim()
+      if (!trimmed) return
+
+      // Añade el mensaje del usuario al historial visible
+      setMessagesState((prev) => [...prev, { role: "user", content: trimmed }])
+
+      setStreaming(true)
+      setPendingText("")
+      streamIdxRef.current = null
+
+      // Snapshot del historial + el mensaje recién enviado
+      // (evitamos race de setState)
+      const snapshot: ChatMessage[] = [
+        ...messages,
+        { role: "user", content: trimmed },
+      ]
+
+      abortRef.current = await startStream(snapshot, (type, data) => {
+        if (LOG) {
+          const len = typeof data === "string" ? data.length : JSON.stringify(data).length
+          console.log("[CHAT]", type, "len:", len)
+        }
+        switch (type) {
+          case "token": {
+            const token = String(data)
+            setPendingText((prev) => {
+              const next = prev + token
+              updateAssistant(next)
+              return next
+            })
+            break
+          }
+          case "final": {
+            closeAssistant(String(data))
+            break
+          }
+          case "tool": {
+            onTool?.(data)
+            break
+          }
+          case "error": {
+            console.error("[CHAT error]", data)
+            setStreaming(false)
+            break
+          }
+        }
+      })
+
+      setStreaming(false)
+      return abortRef.current
+    },
+    [messages, onTool, updateAssistant, closeAssistant]
+  )
+
+  /** Cancela el stream actual */
+  const abort = useCallback(() => {
+    abortRef.current?.()
+    abortRef.current = null
+    streamIdxRef.current = null
+    setPendingText("")
+    setStreaming(false)
+  }, [])
+
+  return {
+    messages,
+    pendingText,
+    streaming,
+    send,
+    setMessages, // compat con tu componente
+    abort,
+  }
 }
