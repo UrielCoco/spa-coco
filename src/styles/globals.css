@@ -57,9 +57,7 @@
     --accent-foreground: 0 0% 100%;
   }
 
-  * {
-    @apply border-transparent; /* quita bordes globales */
-  }
+
   body {
     @apply bg-background text-foreground antialiased;
   }
