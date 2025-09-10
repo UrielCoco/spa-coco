@@ -1,0 +1,139 @@
+{
+  "meta": {
+    "tripTitle": "CDMX Express",
+    "travelers": 2,
+    "currency": "MXN",
+    "startDate": "2025-10-10",
+    "endDate": "2025-10-12",
+    "notes": "Prueba de 3 d\u00edas con gastronom\u00eda y cultura."
+  },
+  "summary": {
+    "overview": "Escapada corta a CDMX con lo esencial.",
+    "highlights": [
+      "Centro Hist\u00f3rico",
+      "Xochimilco",
+      "Coyoac\u00e1n"
+    ],
+    "budgetEstimate": 15000
+  },
+  "flights": {
+    "originCountry": "Colombia",
+    "originCity": "Bogot\u00e1",
+    "returnCountry": "Colombia",
+    "returnCity": "Bogot\u00e1",
+    "outbound": {
+      "airline": "Aerom\u00e9xico",
+      "code": "AM700",
+      "depTime": "2025-10-10T07:00",
+      "arrTime": "2025-10-10T10:30",
+      "from": "BOG",
+      "to": "MEX"
+    },
+    "inbound": {
+      "airline": "Aerom\u00e9xico",
+      "code": "AM701",
+      "depTime": "2025-10-12T19:00",
+      "arrTime": "2025-10-13T00:20",
+      "from": "MEX",
+      "to": "BOG"
+    }
+  },
+  "days": [
+    {
+      "dayIndex": 1,
+      "city": "Ciudad de M\u00e9xico",
+      "country": "M\u00e9xico",
+      "activities": [
+        {
+          "time": "09:00",
+          "title": "Desayuno en El Cardenal",
+          "tag": "restaurant",
+          "cost": 300
+        },
+        {
+          "time": "11:00",
+          "title": "Tour Centro Hist\u00f3rico",
+          "tag": "tour",
+          "durationMins": 180,
+          "location": {
+            "name": "Z\u00f3calo",
+            "coords": [
+              19.4326,
+              -99.1332
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "dayIndex": 2,
+      "city": "Xochimilco",
+      "country": "M\u00e9xico",
+      "activities": [
+        {
+          "time": "10:00",
+          "title": "Trajinera y mariachi",
+          "tag": "experience",
+          "durationMins": 200,
+          "location": {
+            "name": "Embarcadero",
+            "coords": [
+              19.267,
+              -99.103
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "dayIndex": 3,
+      "city": "Coyoac\u00e1n",
+      "country": "M\u00e9xico",
+      "activities": [
+        {
+          "time": "12:00",
+          "title": "Casa Azul Frida Kahlo",
+          "tag": "attraction",
+          "location": {
+            "name": "Museo Frida",
+            "coords": [
+              19.355,
+              -99.162
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "transports": [
+    {
+      "mode": "car",
+      "from": {
+        "name": "Centro",
+        "coords": [
+          19.4326,
+          -99.1332
+        ]
+      },
+      "to": {
+        "name": "Xochimilco",
+        "coords": [
+          19.267,
+          -99.103
+        ]
+      },
+      "etaMins": 45
+    }
+  ],
+  "extras": [
+    {
+      "type": "private_dinner",
+      "title": "Cena privada en terraza",
+      "price": 3500,
+      "schedule": {
+        "date": "2025-10-11",
+        "time": "20:00"
+      }
+    }
+  ]
+}

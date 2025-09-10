@@ -1,0 +1,14 @@
+{
+  "summary": "Summary",
+  "flights": "Flights",
+  "days": "Days",
+  "transports": "Transports",
+  "extras": "Extras",
+  "overview": "Overview",
+  "highlights": "Highlights",
+  "budget": "Budget",
+  "origin": "Origin",
+  "return": "Return",
+  "outbound": "Outbound",
+  "inbound": "Inbound"
+}

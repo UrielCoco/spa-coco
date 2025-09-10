@@ -1,0 +1,14 @@
+{
+  "title": "Itinerary Builder",
+  "new": "New",
+  "openJson": "Open JSON",
+  "saveJson": "Save JSON",
+  "exportPdf": "Export PDF",
+  "language": "Language",
+  "chat": "Chat",
+  "itinerary": "Itinerary",
+  "apply": "Apply to Itinerary",
+  "send": "Send",
+  "typeMessage": "Type a message...",
+  "loading": "Loading..."
+}
