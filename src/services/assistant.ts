@@ -30,6 +30,7 @@ export async function startStream(
   const decoder = new TextDecoder()
   let buf = ''
 
+  
   ;(async () => {
     while (true) {
       const { value, done } = await reader.read()
