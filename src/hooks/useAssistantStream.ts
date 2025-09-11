@@ -16,9 +16,7 @@ function safePreview(obj: any, max = 800) {
   } catch { return obj; }
 }
 const dlog = (...args: any[]) => { if (DEBUG) console.debug("[useAssistantStream]", ...args); };
-const dlogEvt = (evt: string, payload: any) => {
-  if (DEBUG) console.debug("[SSE evt]", evt, safePreview(payload));
-};
+const dlogEvt = (evt: string, payload: any) => { if (DEBUG) console.debug("[SSE evt]", evt, safePreview(payload)); };
 /** ================================= */
 
 const FALLBACK_TEXT = "Listo, actualicé el itinerario de la derecha. ✅";
@@ -29,38 +27,27 @@ function pickText(payload: any): string {
   try {
     if (!payload) return "";
 
-    // NUEVO: muchos backends mandan { value: "..." }
-    if (typeof payload.value === "string") return payload.value;
-
-    // OpenAI Responses/Assistants
-    if (typeof payload.delta === "string") return payload.delta;
+    if (typeof payload.value === "string") return payload.value;       // muchos backends usan { value }
+    if (typeof payload.delta === "string") return payload.delta;       // OpenAI Responses/Assistants
     if (typeof payload.text === "string") return payload.text;
-
-    // Vercel AI SDK
-    if (typeof payload.textDelta === "string") return payload.textDelta;
-
-    // genéricos
+    if (typeof payload.textDelta === "string") return payload.textDelta; // Vercel AI SDK
     if (typeof payload.message === "string") return payload.message;
 
-    // anidados
+    // anidados frecuentes
     if (payload?.text && typeof payload.text.value === "string") return payload.text.value;
     if (payload?.delta && typeof payload.delta.value === "string") return payload.delta.value;
 
-    // { content: [...] } variantes
     if (Array.isArray(payload.content)) {
       for (const c of payload.content) {
-        if (c && typeof c.text === "string") return c.text;
-        if (c && typeof c.delta === "string") return c.delta;
-        if (c && typeof c.value === "string") return c.value;
+        if (typeof c?.text === "string") return c.text;
+        if (typeof c?.delta === "string") return c.delta;
+        if (typeof c?.value === "string") return c.value;
       }
     }
-
-    // { choices: [{ delta: { content: "..." } }] }
     if (Array.isArray(payload.choices)) {
       const d = payload.choices[0]?.delta?.content;
       if (typeof d === "string") return d;
     }
-
     if (typeof payload === "string") return payload;
     return "";
   } catch {
@@ -68,7 +55,7 @@ function pickText(payload: any): string {
   }
 }
 
-/** Desenvuelve el payload de tool a un objeto args simple */
+/** Desenvuelve payload de tool a args simples */
 function unwrapToolPayload(payload: any): any {
   let raw = payload;
   try { raw = typeof raw === "string" ? JSON.parse(raw) : raw; } catch {}
@@ -78,15 +65,16 @@ function unwrapToolPayload(payload: any): any {
     const args = (raw as any).arguments;
     try { return typeof args === "string" ? JSON.parse(args) : args; } catch { return args; }
   }
-  return raw;
+  return raw; // { partial: {...} } o plano
 }
 
-/** Normaliza nombres de eventos de distintos proveedores */
+/** Mapea nombres de evento a tipos internos */
 function mapEvent(evt?: string) {
   const e = (evt || "").toLowerCase();
 
   if (e === "meta") return "meta";
 
+  // Texto
   if (
     e === "delta" ||
     e === "token" ||
@@ -97,20 +85,53 @@ function mapEvent(evt?: string) {
     e.includes("response.delta")
   ) return "delta";
 
+  // Tool-call (varios dialectos)
+  if (
+    e.includes("tool_call.arguments.delta") ||
+    e.includes("function_call.arguments.delta") ||
+    e.includes("tool_call.delta") ||
+    e.includes("function_call.delta")
+  ) return "tool-args-delta";
+
+  if (
+    e.includes("tool_call.completed") ||
+    e.includes("function_call.completed") ||
+    e.includes("requires_action")
+  ) return "tool-args-complete";
+
   if (
     e === "tool" ||
-    e.includes("tool_call") ||
-    e.includes("tool-call") ||
     e.includes("tool.result") ||
     e.includes("tool_call.result")
-  ) return "tool";
+  ) return "tool-result";
 
+  // Final
   if (e === "final" || e === "done" || e.includes("completed") || e.includes("finish"))
     return "done";
 
   if (e.includes("error") || e === "error") return "error";
 
   return "unknown";
+}
+
+/** Busca llamadas a upsert_itinerary en un objeto arbitrario (ej. payload de 'final') */
+function deepFindUpsertCalls(obj: any, acc: Array<{ name: string; args: any }> = []) {
+  if (!obj || typeof obj !== "object") return acc;
+
+  // Caso directo
+  if (typeof obj.name === "string" && obj.name.includes("upsert_itinerary")) {
+    const rawArgs = ("arguments" in obj) ? (obj as any).arguments : (obj as any).args;
+    let args = rawArgs;
+    try { args = typeof rawArgs === "string" ? JSON.parse(rawArgs) : rawArgs; } catch {}
+    acc.push({ name: obj.name, args });
+  }
+
+  for (const k of Object.keys(obj)) {
+    const v = (obj as any)[k];
+    if (v && typeof v === "object") deepFindUpsertCalls(v, acc);
+    if (Array.isArray(v)) v.forEach((it) => deepFindUpsertCalls(it, acc));
+  }
+  return acc;
 }
 
 export function useAssistantStream({ onTool }: { onTool?: (json: any) => void } = {}) {
@@ -124,6 +145,9 @@ export function useAssistantStream({ onTool }: { onTool?: (json: any) => void } 
     receivedTool: false,
     emittedFallback: false,
   });
+
+  // Buffer de tool-calls por ID (cuando vienen como .arguments.delta)
+  const toolBuffersRef = useRef<Record<string, { name?: string; buffer: string }>>({});
 
   const ensureAssistantPlaceholder = useCallback(() => {
     setMessages((curr) => {
@@ -194,8 +218,80 @@ export function useAssistantStream({ onTool }: { onTool?: (json: any) => void } 
     }
   }, [onTool]);
 
+  // Cuando recibimos un delta de argumentos de tool
+  const onToolArgsDelta = useCallback((payload: any) => {
+    try {
+      const id = payload?.id || payload?.call_id || payload?.tool_call_id || "default";
+      const name = payload?.name || payload?.tool?.name || payload?.function?.name;
+      const delta =
+        payload?.arguments?.delta ??
+        payload?.delta ??
+        payload?.value ??
+        payload?.arguments ??
+        "";
+
+      if (!toolBuffersRef.current[id]) toolBuffersRef.current[id] = { name, buffer: "" };
+      if (name && !toolBuffersRef.current[id].name) toolBuffersRef.current[id].name = name;
+      if (typeof delta === "string" && delta) {
+        toolBuffersRef.current[id].buffer += delta;
+        dlog("tool-args-delta id:", id, "name:", name, "chunk:", JSON.stringify(delta).slice(0, 120));
+      }
+      flagsRef.current.receivedTool = true;
+    } catch (e) {
+      console.error("[tool-args-delta error]", e);
+    }
+  }, []);
+
+  // Cuando el tool-call se completa (cerramos y ejecutamos)
+  const onToolArgsComplete = useCallback((payload: any) => {
+    try {
+      const id = payload?.id || payload?.call_id || payload?.tool_call_id || "default";
+      const buf = toolBuffersRef.current[id];
+      const name =
+        payload?.name ||
+        payload?.tool?.name ||
+        payload?.function?.name ||
+        buf?.name ||
+        "";
+
+      let args: any = payload?.arguments ?? payload?.args;
+      if (!args && buf?.buffer) args = buf.buffer;
+
+      if (typeof args === "string") {
+        try { args = JSON.parse(args); } catch {}
+      }
+
+      dlog("tool-args-complete id:", id, "name:", name, "args preview:", safePreview(args));
+      if (name && name.includes("upsert_itinerary")) {
+        handleTool({ name, arguments: args });
+      }
+
+      delete toolBuffersRef.current[id];
+    } catch (e) {
+      console.error("[tool-args-complete error]", e);
+    }
+  }, [handleTool]);
+
+  // Última oportunidad: extrae tool-calls del payload final
+  const tryToolsFromFinal = useCallback((payload: any) => {
+    try {
+      const calls = deepFindUpsertCalls(payload);
+      if (calls.length) {
+        dlog("final → found upsert_itinerary calls:", calls.length);
+        flagsRef.current.receivedTool = true;
+        for (const c of calls) handleTool({ name: c.name, arguments: c.args });
+      } else {
+        dlog("final → no upsert_itinerary calls found");
+      }
+    } catch (e) {
+      console.error("[final parse tools error]", e);
+    }
+  }, [handleTool]);
+
   const send = useCallback(async (text: string) => {
+    // reinicia flags/buffers por cada mensaje del usuario
     flagsRef.current = { receivedText: false, receivedTool: false, emittedFallback: false };
+    toolBuffersRef.current = {};
 
     dlog("SEND ▶ user:", JSON.stringify(text));
     const next: ChatMessage[] = [...messages, { role: "user", content: text }];
@@ -214,32 +310,41 @@ export function useAssistantStream({ onTool }: { onTool?: (json: any) => void } 
           dlog("mapped type:", type);
 
           if (type === "delta") {
-            // Crear burbuja y pegar token
             ensureAssistantPlaceholder();
-            const piece = pickText(payload); // ← ahora soporta payload.value
+            const piece = pickText(payload);
             if (piece) appendAssistantText(piece);
             return;
           }
 
-          if (type === "tool") {
-            // Deja burbuja para posible fallback si no llega texto
+          if (type === "tool-args-delta") {
+            ensureAssistantPlaceholder(); // para poder mostrar fallback si al final no hay texto
+            onToolArgsDelta(payload);
+            return;
+          }
+
+          if (type === "tool-args-complete" || type === "tool-result") {
             ensureAssistantPlaceholder();
-            handleTool(payload);
+            onToolArgsComplete(payload);
             return;
           }
 
           if (type === "done") {
-            // NUEVO: si el evento final trae texto, úsalo
+            // 1) Pega texto final si vino ahí
             const finalText = pickText(payload) || payload?.text || payload?.message || payload?.value || "";
             if (finalText && !flagsRef.current.receivedText) {
               ensureAssistantPlaceholder();
               appendAssistantText(finalText);
             }
 
+            // 2) Si no vimos tool events, intenta extraerlos del payload final
+            if (!flagsRef.current.receivedTool && payload && typeof payload === "object") {
+              tryToolsFromFinal(payload);
+            }
+
             setStreaming(false);
             abortRef.current = null;
             dlog("DONE ⏹ flags:", { ...flagsRef.current });
-            maybeEmitFallback();
+            maybeEmitFallback(); // solo si hubo tool y no hubo texto
             return;
           }
 
@@ -274,7 +379,15 @@ export function useAssistantStream({ onTool }: { onTool?: (json: any) => void } 
       dlog("EXCEPTION ⏹ flags:", { ...flagsRef.current });
       maybeEmitFallback();
     }
-  }, [messages, ensureAssistantPlaceholder, appendAssistantText, handleTool, maybeEmitFallback]);
+  }, [
+    messages,
+    ensureAssistantPlaceholder,
+    appendAssistantText,
+    onToolArgsDelta,
+    onToolArgsComplete,
+    tryToolsFromFinal,
+    maybeEmitFallback,
+  ]);
 
   const abort = () => {
     dlog("ABORT requested");
