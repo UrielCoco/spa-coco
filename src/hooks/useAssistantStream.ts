@@ -1,102 +1,186 @@
-import { useCallback, useRef, useState } from "react"
-import type { ChatMessage } from "@/services/assistant"
-import { startStream } from "@/services/assistant"
-import { mergeItinerary, extractLabels } from "@/services/parsers"
-import { useItinerary } from "@/store/itinerary.store"
+import { useCallback, useRef, useState } from "react";
+import type { ChatMessage } from "@/services/assistant";
+import { startStream } from "@/services/assistant";
+import { mergeItinerary, extractLabels } from "@/services/parsers";
+import { useItinerary } from "@/store/itinerary.store";
 
-type Args = { onTool?: (json: any) => void }
+/** Intenta extraer texto de cualquier payload posible */
+function pickText(payload: any): string {
+  try {
+    if (!payload) return "";
 
-/** Intenta sacar la parte de texto de los distintos formatos que puede mandar el SSE */
-function pickText(payload: unknown): string {
-  if (payload == null) return ""
-  if (typeof payload === "string") return payload
+    // Respuestas OpenAI Responses/Assistants
+    // - response.output_text.delta => { delta: "..." }
+    if (typeof payload.delta === "string") return payload.delta;
+    if (typeof payload.text === "string") return payload.text;
 
-  const p = payload as any
+    // AI SDK (text-delta) suele mandar { textDelta: "..." } o { content: [{type:'text-delta', text:'...'}] }
+    if (typeof payload.textDelta === "string") return payload.textDelta;
 
-  // {content:[{type:'output_text'|'input_text', text:'...'}]}
-  if (p?.content && Array.isArray(p.content)) {
-    const textItem = p.content.find((x: any) => x?.type?.includes("text"))
-    if (textItem?.text) return String(textItem.text)
-    if (typeof p.content[0] === "string") return String(p.content[0])
+    // {message:"..." }
+    if (typeof payload.message === "string") return payload.message;
+
+    // { content: [...] } (varios sabores)
+    if (Array.isArray(payload.content)) {
+      // Busca algo con { text }
+      for (const c of payload.content) {
+        if (c && typeof c.text === "string") return c.text;
+        if (c && typeof c.delta === "string") return c.delta;
+      }
+    }
+
+    // { choices: [{ delta: { content: "..."}}] } (estilo OpenAI chat)
+    if (Array.isArray(payload.choices)) {
+      const d = payload.choices[0]?.delta?.content;
+      if (typeof d === "string") return d;
+    }
+
+    // fallback plano
+    if (typeof payload === "string") return payload;
+    return "";
+  } catch {
+    return "";
   }
-
-  // {delta:'...'} o {message:'...'} o {text:'...'}
-  if (typeof p.delta === "string") return p.delta
-  if (typeof p.message === "string") return p.message
-  if (typeof p.text === "string") return p.text
-
-  return ""
 }
 
-/** Normaliza el payload de tool a un objeto simple de argumentos */
+/** Desenvuelve el payload de tool a un objeto args simple */
 function unwrapToolPayload(payload: any): any {
-  let raw = payload
-  try { raw = typeof raw === "string" ? JSON.parse(raw) : raw } catch {}
-  if (!raw || typeof raw !== "object") return undefined
+  let raw = payload;
+  try { raw = typeof raw === "string" ? JSON.parse(raw) : raw; } catch {}
+  if (!raw || typeof raw !== "object") return raw;
 
-  // Forma: { name, arguments } (OpenAI tools)
+  // { name, arguments } de OpenAI Tools
   if ("arguments" in raw) {
-    const args = (raw as any).arguments
-    try { return typeof args === "string" ? JSON.parse(args) : args } catch { return args }
+    const args = (raw as any).arguments;
+    try { return typeof args === "string" ? JSON.parse(args) : args; } catch { return args; }
   }
-
-  // Forma directa: { partial: {...} } o el objeto plano
-  return raw
+  // { partial: {...} } compat
+  return raw;
 }
 
-export function useAssistantStream({ onTool }: Args = {}) {
-  const [messages, setMessages] = useState<ChatMessage[]>([])
-  const [streaming, setStreaming] = useState(false)
-  const abortRef = useRef<AbortController | null>(null)
+/** Normaliza nombres de eventos de múltiples proveedores */
+function mapEvent(evt: string | undefined) {
+  const e = (evt || "").toLowerCase();
 
-  const send = useCallback(
-    async (text: string) => {
-      const next: ChatMessage[] = [...messages, { role: "user", content: text }]
-      setMessages(next)
-      setStreaming(true)
+  // Texto en streaming
+  if (
+    e === "delta" ||
+    e === "token" ||
+    e === "message" ||
+    e.includes("text-delta") ||
+    e.includes("message.delta") ||
+    e.includes("response.output_text.delta") ||
+    e.includes("response.delta")
+  ) return "delta";
 
-      const controller = new AbortController()
-      abortRef.current = controller
+  // Herramientas
+  if (
+    e === "tool" ||
+    e.includes("tool_call") ||
+    e.includes("tool-call") ||
+    e.includes("tool.result") ||
+    e.includes("tool_call.result")
+  ) return "tool";
 
+  // Finalización
+  if (
+    e === "final" ||
+    e === "done" ||
+    e.includes("completed") ||
+    e.includes("finish")
+  ) return "done";
+
+  // Errores
+  if (e.includes("error") || e === "error") return "error";
+
+  return "unknown";
+}
+
+export function useAssistantStream({ onTool }: { onTool?: (json: any) => void } = {}) {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [streaming, setStreaming] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
+
+  const appendAssistantText = useCallback((chunk: string) => {
+    if (!chunk) return;
+    setMessages((curr) => {
+      const last = curr[curr.length - 1];
+      if (!last || last.role !== "assistant") {
+        return [...curr, { role: "assistant", content: chunk }];
+      }
+      return [...curr.slice(0, -1), { ...last, content: last.content + chunk }];
+    });
+  }, []);
+
+  const handleTool = useCallback((payload: any) => {
+    try {
+      const args = unwrapToolPayload(payload) ?? {};
+      const partial = (args && typeof args === "object" && "partial" in args) ? (args as any).partial : args;
+      mergeItinerary(partial);
+      const labels = extractLabels(partial);
+      if (labels) useItinerary.getState().mergeItinerary({ labels });
+      onTool?.(partial);
+    } catch (e) {
+      console.error("[tool parse error]", e);
+    }
+  }, [onTool]);
+
+  const send = useCallback(async (text: string) => {
+    const next: ChatMessage[] = [...messages, { role: "user", content: text }];
+    setMessages(next);
+    setStreaming(true);
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    try {
       await startStream(next, {
         signal: controller.signal,
-        onEvent: (evt, payload) => {
-          if (evt === "delta" || evt === "token" || evt === "message") {
-            const piece = pickText(payload)
-            if (!piece) return
-            setMessages((curr) => {
-              const last = curr[curr.length - 1]
-              if (!last || last.role !== "assistant") {
-                return [...curr, { role: "assistant", content: piece }]
-              }
-              return [...curr.slice(0, -1), { ...last, content: last.content + piece }]
-            })
-          } else if (evt === "tool") {
-            try {
-              const args = unwrapToolPayload(payload) || {}
-              // Compatibilidad: a veces viene { partial: {...} }
-              const partial = (args && typeof args === "object" && "partial" in args) ? (args as any).partial : args
-              mergeItinerary(partial)
-              const labels = extractLabels(partial)
-              if (labels) useItinerary.getState().mergeItinerary({ labels })
-              onTool?.(partial)
-            } catch (e) {
-              console.error("tool parse error", e)
-            }
-          } else if (evt === "final" || evt === "done") {
-            setStreaming(false)
-          } else if (evt === "error") {
-            console.error("[stream error]", payload)
-            setStreaming(false)
+        onEvent: (evt: string, payload: any) => {
+          const type = mapEvent(evt);
+
+          if (type === "delta") {
+            const piece = pickText(payload);
+            if (piece) appendAssistantText(piece);
+            return;
           }
+          if (type === "tool") {
+            handleTool(payload);
+            return;
+          }
+          if (type === "done") {
+            setStreaming(false);
+            abortRef.current = null;
+            return;
+          }
+          if (type === "error") {
+            console.error("[stream error]", payload);
+            setStreaming(false);
+            abortRef.current = null;
+            return;
+          }
+
+          // Log de diagnóstico para eventos no mapeados
+          console.debug("[stream unknown evt]", evt, payload);
         },
-        onError: () => setStreaming(false),
-      })
-    },
-    [messages, onTool]
-  )
+        onError: (err: any) => {
+          console.error("[stream fatal]", err);
+          setStreaming(false);
+          abortRef.current = null;
+        },
+      });
+    } catch (e) {
+      console.error("[startStream exception]", e);
+      setStreaming(false);
+      abortRef.current = null;
+    }
+  }, [messages, appendAssistantText, handleTool]);
 
-  const abort = () => abortRef.current?.abort()
+  const abort = () => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setStreaming(false);
+  };
 
-  return { messages, setMessages, send, abort, streaming } as const
+  return { messages, setMessages, send, abort, streaming } as const;
 }
