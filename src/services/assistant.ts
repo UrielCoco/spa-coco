@@ -1,112 +1,127 @@
-import { safeFetch } from "@/lib/fetch"
+// src/services/assistant.ts
+import { safeFetch } from "@/lib/fetch";
 
-export type ChatRole = "user" | "assistant" | "system"
+export type ChatRole = "user" | "assistant" | "system";
 
 export type ChatMessage = {
-  role: ChatRole
-  content: string
-}
+  role: ChatRole;
+  content: string;
+};
 
 type StreamEvent =
   | "meta"
   | "delta"
-  | "token"
-  | "message"
-  | "tool"
-  | "final"
+  | "tool_call.arguments.delta"
+  | "tool_call.completed"
   | "done"
   | "error"
+  | "message";
 
-export type StartStreamOptions = {
-  signal?: AbortSignal
-  onEvent: (evt: StreamEvent, payload?: unknown) => void
-  onError?: (err: unknown) => void
-}
+type StartStreamOpts = {
+  signal?: AbortSignal;
+  onEvent?: (event: StreamEvent, data: any) => void;
+  onError?: (err: any) => void;
+};
 
+/**
+ * Inicia un stream SSE contra /api/spa-chat y ejecuta onEvent(event, data)
+ * por cada chunk { event: "...", data: ... }.
+ */
 export async function startStream(
   messages: ChatMessage[],
-  { signal, onEvent, onError }: StartStreamOptions
-): Promise<void> {
-  const base = (import.meta.env.VITE_ASSISTANT_BASE_URL || "/api").trim()
-  const model = import.meta.env.VITE_ASSISTANT_MODEL
-  const apiKey = import.meta.env.VITE_ASSISTANT_API_KEY
-  const endpoint = `${base.replace(/\/$/, "")}/chat`
+  opts: StartStreamOpts = {}
+) {
+  const { signal, onEvent, onError } = opts;
 
   try {
-    const resp = await safeFetch(endpoint, {
+    // 🔒 Valida mensajes para evitar 400
+    if (!Array.isArray(messages) || messages.length === 0) {
+      throw new Error(
+        "startStream: expected an array of messages [{ role, content }]."
+      );
+    }
+
+    // 👈 USA el endpoint nuevo pensado para la SPA
+    const resp = await safeFetch("/api/spa-chat", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-      },
-      body: JSON.stringify({ messages, model, stream: true }),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages }),
       signal,
-    })
+    });
 
     if (!resp.ok) {
-      const text = await resp.text().catch(() => "")
-      throw new Error(`HTTP ${resp.status}: ${text}`)
+      let payload: any = null;
+      try {
+        payload = await resp.json();
+      } catch {
+        // noop
+      }
+      const msg = payload?.error || `HTTP ${resp.status}`;
+      onError?.(new Error(msg));
+      onEvent?.("error", { message: msg });
+      return;
     }
 
-    const reader = resp.body?.getReader()
-    if (!reader) throw new Error("No stream body")
-
-    const decoder = new TextDecoder()
-    let buf = ""
-
-    const emit = (chunk: string) => {
-      const lines = chunk.split("\n")
-      let event: StreamEvent = "message"
-      let data = ""
-
-      for (const raw of lines) {
-        const line = raw.trim()
-        if (!line) continue
-        if (line.startsWith("event:")) {
-          event = (line.slice(6).trim() as StreamEvent) || "message"
-        } else if (line.startsWith("data:")) {
-          data = line.slice(5).trim()
-        }
-      }
-      if (!lines.some((l) => l.startsWith("event:"))) {
-        event = "delta"
-        data = chunk.trim()
-      }
-      if (event === "delta" || event === "token")
-        return onEvent("delta", safe(data))
-      if (event === "tool") return onEvent("tool", safe(data))
-      if (event === "final" || event === "done")
-        return onEvent(event, safe(data))
-      if (event === "meta" || event === "message")
-        return onEvent(event, safe(data))
-      if (event === "error") return onEvent("error", safe(data))
+    if (!resp.body) {
+      const err = new Error("No response body");
+      onError?.(err);
+      onEvent?.("error", { message: err.message });
+      return;
     }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
 
     while (true) {
-      const { value, done } = await reader.read()
-      if (done) break
-      buf += decoder.decode(value, { stream: true })
+      const { value, done } = await reader.read();
+      if (done) break;
 
-      let sep = buf.indexOf("\n\n")
-      while (sep !== -1) {
-        const chunk = buf.slice(0, sep)
-        buf = buf.slice(sep + 2)
-        emit(chunk)
-        sep = buf.indexOf("\n\n")
+      buffer += decoder.decode(value, { stream: true });
+      const chunks = buffer.split("\n\n"); // SSE separa eventos con línea en blanco
+      buffer = chunks.pop() ?? "";
+
+      for (const chunk of chunks) {
+        let event: StreamEvent = "message";
+        let dataStr = "";
+
+        const lines = chunk.split("\n");
+        for (const raw of lines) {
+          const line = raw.trim();
+          if (!line) continue;
+          if (line.startsWith("event:")) {
+            event = line.slice(6).trim() as StreamEvent;
+          } else if (line.startsWith("data:")) {
+            // Puede haber múltiples líneas "data:"
+            dataStr += line.slice(5).trim();
+          }
+        }
+
+        // Fallback: algunos servers no incluyen "event:"
+        if (!lines.some((l) => l.startsWith("event:"))) {
+          event = "delta";
+          dataStr = chunk.trim().replace(/^data:\s*/g, "");
+        }
+
+        let payload: any = dataStr;
+        try {
+          payload = JSON.parse(dataStr);
+        } catch {
+          // si no es JSON, dejamos el string tal cual
+        }
+
+        onEvent?.(event, payload);
       }
     }
-    if (buf.trim()) emit(buf)
-    onEvent("done", {})
-  } catch (err) {
-    onError?.(err)
-    onEvent("error", err instanceof Error ? err.message : String(err ?? "unknown"))
-  }
-}
 
-function safe(s: string): unknown {
-  try {
-    return JSON.parse(s)
-  } catch {
-    return s
+    // Cierre "limpio"
+    onEvent?.("done", {});
+
+  } catch (err) {
+    onError?.(err);
+    onEvent?.(
+      "error",
+      err instanceof Error ? err.message : String(err ?? "unknown")
+    );
   }
 }
