@@ -1,4 +1,3 @@
-// src/hooks/useAssistantStream.ts
 import { useCallback, useRef, useState } from "react"
 import type { ChatMessage } from "@/services/assistant"
 import { startStream } from "@/services/assistant"
@@ -25,7 +24,6 @@ export function useAssistantStream({ onTool }: Args = {}) {
         signal: controller.signal,
         onEvent: (evt, payload) => {
           if (evt === "delta" || evt === "token" || evt === "message") {
-            // streaming del assistant
             setMessages((curr) => {
               const last = curr[curr.length - 1]
               if (!last || last.role !== "assistant") {
@@ -36,13 +34,9 @@ export function useAssistantStream({ onTool }: Args = {}) {
           } else if (evt === "tool") {
             try {
               const partial = typeof payload === "string" ? JSON.parse(payload) : (payload as any)
-              // 1) merge persistente
               mergeItinerary(partial)
-              // 2) labels con prioridad
               const labels = extractLabels(partial)
-              if (labels) {
-                useItinerary.getState().mergeItinerary({ labels })
-              }
+              if (labels) useItinerary.getState().mergeItinerary({ labels })
               onTool?.(partial)
             } catch (e) {
               console.error("tool parse error", e)
@@ -54,9 +48,7 @@ export function useAssistantStream({ onTool }: Args = {}) {
             setStreaming(false)
           }
         },
-        onError: () => {
-          setStreaming(false)
-        },
+        onError: () => setStreaming(false),
       })
     },
     [messages, onTool]

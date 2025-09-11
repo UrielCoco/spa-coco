@@ -1,4 +1,3 @@
-// src/services/assistant.ts
 import { safeFetch } from "@/lib/fetch"
 
 export type ChatRole = "user" | "assistant" | "system"
@@ -10,7 +9,7 @@ export type ChatMessage = {
 
 type StreamEvent =
   | "meta"
-  | "delta" // sinónimo de 'token' en algunos backends
+  | "delta"
   | "token"
   | "message"
   | "tool"
@@ -24,27 +23,21 @@ export type StartStreamOptions = {
   onError?: (err: unknown) => void
 }
 
-/**
- * Inicia el stream SSE contra tu endpoint /chat.
- * Contrato: startStream(messages, { onEvent, onError, signal })
- */
 export async function startStream(
   messages: ChatMessage[],
   { signal, onEvent, onError }: StartStreamOptions
 ): Promise<void> {
-  const base = import.meta.env.VITE_ASSISTANT_BASE_URL
+  const base = (import.meta.env.VITE_ASSISTANT_BASE_URL || "/api").trim()
   const model = import.meta.env.VITE_ASSISTANT_MODEL
   const apiKey = import.meta.env.VITE_ASSISTANT_API_KEY
-
-  if (!base) throw new Error("VITE_ASSISTANT_BASE_URL no está definido")
+  const endpoint = `${base.replace(/\/$/, "")}/chat`
 
   try {
-    const resp = await safeFetch(`${sanitizeBase(base)}/chat`, {
+    const resp = await safeFetch(endpoint, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-        "X-Client": "itinerary-spa",
       },
       body: JSON.stringify({ messages, model, stream: true }),
       signal,
@@ -61,9 +54,7 @@ export async function startStream(
     const decoder = new TextDecoder()
     let buf = ""
 
-    // Utilidad para emitir un bloque SSE parseado
-    const emitLines = (chunk: string) => {
-      // Formato SSE clásico: líneas "event: X" y "data: Y" separadas por doble salto
+    const emit = (chunk: string) => {
       const lines = chunk.split("\n")
       let event: StreamEvent = "message"
       let data = ""
@@ -77,59 +68,34 @@ export async function startStream(
           data = line.slice(5).trim()
         }
       }
-
-      // fallback de compatibilidad: si no vino "event", tratamos como delta/token
       if (!lines.some((l) => l.startsWith("event:"))) {
         event = "delta"
         data = chunk.trim()
       }
-
-      // Normalizar 'delta'/'token'
-      if (event === "delta" || event === "token") {
-        onEvent("delta", safeJsonOrText(data))
-        return
-      }
-
-      if (event === "tool") {
-        onEvent("tool", safeJsonOrText(data))
-        return
-      }
-
-      if (event === "final" || event === "done") {
-        onEvent(event, safeJsonOrText(data))
-        return
-      }
-
-      if (event === "meta" || event === "message") {
-        onEvent(event, safeJsonOrText(data))
-        return
-      }
-
-      if (event === "error") {
-        onEvent("error", safeJsonOrText(data))
-        return
-      }
+      if (event === "delta" || event === "token")
+        return onEvent("delta", safe(data))
+      if (event === "tool") return onEvent("tool", safe(data))
+      if (event === "final" || event === "done")
+        return onEvent(event, safe(data))
+      if (event === "meta" || event === "message")
+        return onEvent(event, safe(data))
+      if (event === "error") return onEvent("error", safe(data))
     }
 
-    // Leer stream incrementalmente
     while (true) {
       const { value, done } = await reader.read()
       if (done) break
       buf += decoder.decode(value, { stream: true })
 
-      // Dividir por bloques SSE con doble salto de línea
       let sep = buf.indexOf("\n\n")
       while (sep !== -1) {
         const chunk = buf.slice(0, sep)
         buf = buf.slice(sep + 2)
-        emitLines(chunk)
+        emit(chunk)
         sep = buf.indexOf("\n\n")
       }
     }
-
-    // Procesar cualquier residuo
-    if (buf.trim()) emitLines(buf)
-
+    if (buf.trim()) emit(buf)
     onEvent("done", {})
   } catch (err) {
     onError?.(err)
@@ -137,11 +103,7 @@ export async function startStream(
   }
 }
 
-function sanitizeBase(base: string) {
-  return base.endsWith("/") ? base.slice(0, -1) : base
-}
-
-function safeJsonOrText(s: string): unknown {
+function safe(s: string): unknown {
   try {
     return JSON.parse(s)
   } catch {
