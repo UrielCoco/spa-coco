@@ -13,7 +13,7 @@ export default function Home() {
   const it = useItinerary(s => s.itinerary)
   const [tab, setTab] = useState('chat')
 
-  const onTool = (json: any) => mergeItinerary(json)
+  const onTool = (json: any) => console.debug("[tool]", json)
 
   return (
     <div className="h-screen flex flex-col">

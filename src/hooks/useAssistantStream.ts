@@ -13,25 +13,35 @@ function pickText(payload: unknown): string {
 
   const p = payload as any
 
-  // Formatos más comunes
-  if (typeof p?.value === "string") return p.value
-  if (typeof p?.delta === "string") return p.delta
-  if (typeof p?.text === "string") return p.text
-  if (typeof p?.content === "string") return p.content
-
-  // A veces viene como arrays de objetos con text
-  if (Array.isArray(p?.content) && typeof p.content[0]?.text === "string") {
-    return p.content[0].text
-  }
-  if (Array.isArray(p?.parts) && typeof p.parts[0]?.text === "string") {
-    return p.parts[0].text
+  // {content:[{type:'output_text'|'input_text', text:'...'}]}
+  if (p?.content && Array.isArray(p.content)) {
+    const textItem = p.content.find((x: any) => x?.type?.includes("text"))
+    if (textItem?.text) return String(textItem.text)
+    if (typeof p.content[0] === "string") return String(p.content[0])
   }
 
-  // Si trae un objeto tipo { output_text: "..." }
-  if (typeof p?.output_text === "string") return p.output_text
+  // {delta:'...'} o {message:'...'} o {text:'...'}
+  if (typeof p.delta === "string") return p.delta
+  if (typeof p.message === "string") return p.message
+  if (typeof p.text === "string") return p.text
 
-  // Fallback: nada de texto
   return ""
+}
+
+/** Normaliza el payload de tool a un objeto simple de argumentos */
+function unwrapToolPayload(payload: any): any {
+  let raw = payload
+  try { raw = typeof raw === "string" ? JSON.parse(raw) : raw } catch {}
+  if (!raw || typeof raw !== "object") return undefined
+
+  // Forma: { name, arguments } (OpenAI tools)
+  if ("arguments" in raw) {
+    const args = (raw as any).arguments
+    try { return typeof args === "string" ? JSON.parse(args) : args } catch { return args }
+  }
+
+  // Forma directa: { partial: {...} } o el objeto plano
+  return raw
 }
 
 export function useAssistantStream({ onTool }: Args = {}) {
@@ -63,7 +73,9 @@ export function useAssistantStream({ onTool }: Args = {}) {
             })
           } else if (evt === "tool") {
             try {
-              const partial = typeof payload === "string" ? JSON.parse(payload) : (payload as any)
+              const args = unwrapToolPayload(payload) || {}
+              // Compatibilidad: a veces viene { partial: {...} }
+              const partial = (args && typeof args === "object" && "partial" in args) ? (args as any).partial : args
               mergeItinerary(partial)
               const labels = extractLabels(partial)
               if (labels) useItinerary.getState().mergeItinerary({ labels })
