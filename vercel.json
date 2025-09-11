@@ -1,8 +1,8 @@
 {
   "rewrites": [
     {
-      "source": "/api/chat",
-      "destination": "https://coco-volare-ai-chat.vercel.app/api/chat"
+      "source": "/api/spa-chat",
+      "destination": "https://coco-volare-ai-chat.vercel.app/api/spa-chat"
     }
   ]
 }

@@ -1,9 +1,9 @@
-// /api/chat.ts — Vercel Edge Function (proxy SSE + normalizador de payload)
+// /api/spa-chat.ts — Vercel Edge Function (proxy SSE + normalizador de payload)
 // Evita CORS y convierte {messages: [...] } => {message:{ role, parts:[{type:'text',text}] }, stream:true}
 export const config = { runtime: "edge" }
 
 const UPSTREAM =
-  process.env.CHAT_UPSTREAM || "https://coco-volare-ai-chat.vercel.app/api/chat"
+  process.env.CHAT_UPSTREAM || "https://coco-volare-ai-chat.vercel.app/api/spa-chat"
 
 function cors(origin: string) {
   return {

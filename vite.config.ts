@@ -4,7 +4,7 @@ import react from '@vitejs/plugin-react'
 import { fileURLToPath, URL } from 'node:url'
 
 // Opcional: si quieres proxy en dev, exporta VITE_DEV_PROXY_TARGET al correr `pnpm dev`
-// y usa VITE_ASSISTANT_BASE_URL=/api/chat en tu .env
+// y usa VITE_ASSISTANT_BASE_URL=/api/spa-chat en tu .env
 const devProxyTarget = process.env.VITE_DEV_PROXY_TARGET
 
 export default defineConfig({
@@ -18,7 +18,7 @@ export default defineConfig({
     port: 5173,
     proxy: devProxyTarget
       ? {
-          '/api/chat': {
+          '/api/spa-chat': {
             target: devProxyTarget, // ej. http://localhost:3000
             changeOrigin: true,
             ws: true,

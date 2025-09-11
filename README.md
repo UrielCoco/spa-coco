@@ -63,7 +63,7 @@ pnpm format    # prettier
 ### Vercel
 1. Importa el repo en Vercel.
 2. Variables de entorno (Project Settings → Environment Variables):
-   - `VITE_ASSISTANT_BASE_URL` = tu endpoint (p.ej. `https://my-hosted-chat.app/api/chat`)
+   - `VITE_ASSISTANT_BASE_URL` = tu endpoint (p.ej. `https://my-hosted-chat.app/api/spa-chat`)
    - `VITE_ASSISTANT_MODEL` = modelo
    - `VITE_ASSISTANT_API_KEY` = (opcional)
 3. **Mock** solo existe en dev. En prod usa tu endpoint real.
