@@ -6,33 +6,31 @@ import { mergeItinerary, extractLabels } from "@/services/parsers";
 import { useItinerary } from "@/store/itinerary.store";
 
 /** ======== DEBUG CONFIG ======== */
-const DEBUG = true; // 👈 ponlo en false para silenciar logs
-
+const DEBUG = true; // pon en false para silenciar
 function safePreview(obj: any, max = 800) {
   try {
     if (obj == null) return obj;
     if (typeof obj === "string") return obj.length > max ? obj.slice(0, max) + "…(trim)" : obj;
     const str = JSON.stringify(obj);
     return str.length > max ? str.slice(0, max) + "…(trim)" : obj;
-  } catch {
-    return obj;
-  }
+  } catch { return obj; }
 }
 const dlog = (...args: any[]) => { if (DEBUG) console.debug("[useAssistantStream]", ...args); };
 const dlogEvt = (evt: string, payload: any) => {
-  if (!DEBUG) return;
-  console.debug("[SSE evt]", evt, safePreview(payload));
+  if (DEBUG) console.debug("[SSE evt]", evt, safePreview(payload));
 };
 /** ================================= */
 
-/** Texto de fallback si hubo tool-call pero no hubo texto */
 const FALLBACK_TEXT = "Listo, actualicé el itinerario de la derecha. ✅";
 const SHOW_FALLBACK_ONLY_IF_TOOL = true;
 
-/** Intenta extraer texto de cualquier payload posible (AI SDK / Responses / Assistants / Chat) */
+/** Extrae texto de cualquier payload posible (AI SDK / Responses / Assistants / custom) */
 function pickText(payload: any): string {
   try {
     if (!payload) return "";
+
+    // NUEVO: muchos backends mandan { value: "..." }
+    if (typeof payload.value === "string") return payload.value;
 
     // OpenAI Responses/Assistants
     if (typeof payload.delta === "string") return payload.delta;
@@ -44,11 +42,16 @@ function pickText(payload: any): string {
     // genéricos
     if (typeof payload.message === "string") return payload.message;
 
+    // anidados
+    if (payload?.text && typeof payload.text.value === "string") return payload.text.value;
+    if (payload?.delta && typeof payload.delta.value === "string") return payload.delta.value;
+
     // { content: [...] } variantes
     if (Array.isArray(payload.content)) {
       for (const c of payload.content) {
         if (c && typeof c.text === "string") return c.text;
         if (c && typeof c.delta === "string") return c.delta;
+        if (c && typeof c.value === "string") return c.value;
       }
     }
 
@@ -58,7 +61,6 @@ function pickText(payload: any): string {
       if (typeof d === "string") return d;
     }
 
-    // fallback
     if (typeof payload === "string") return payload;
     return "";
   } catch {
@@ -72,12 +74,10 @@ function unwrapToolPayload(payload: any): any {
   try { raw = typeof raw === "string" ? JSON.parse(raw) : raw; } catch {}
   if (!raw || typeof raw !== "object") return raw;
 
-  // { name, arguments } (OpenAI Tools)
   if ("arguments" in raw) {
     const args = (raw as any).arguments;
     try { return typeof args === "string" ? JSON.parse(args) : args; } catch { return args; }
   }
-  // { partial: {...} } o plano
   return raw;
 }
 
@@ -85,10 +85,8 @@ function unwrapToolPayload(payload: any): any {
 function mapEvent(evt?: string) {
   const e = (evt || "").toLowerCase();
 
-  // Meta (threadId, etc.). OJO: no creamos burbuja aquí.
   if (e === "meta") return "meta";
 
-  // Texto en streaming (varios dialectos)
   if (
     e === "delta" ||
     e === "token" ||
@@ -99,7 +97,6 @@ function mapEvent(evt?: string) {
     e.includes("response.delta")
   ) return "delta";
 
-  // Herramientas
   if (
     e === "tool" ||
     e.includes("tool_call") ||
@@ -108,11 +105,9 @@ function mapEvent(evt?: string) {
     e.includes("tool_call.result")
   ) return "tool";
 
-  // Finalización
   if (e === "final" || e === "done" || e.includes("completed") || e.includes("finish"))
     return "done";
 
-  // Errores
   if (e.includes("error") || e === "error") return "error";
 
   return "unknown";
@@ -158,7 +153,7 @@ export function useAssistantStream({ onTool }: { onTool?: (json: any) => void } 
     const { receivedText, receivedTool, emittedFallback } = flagsRef.current;
     dlog("maybeEmitFallback flags:", { receivedText, receivedTool, emittedFallback });
     if (emittedFallback) return;
-    if (receivedText) return; // ya hay texto real, no meter fallback
+    if (receivedText) return;
     if (SHOW_FALLBACK_ONLY_IF_TOOL && !receivedTool) return;
 
     setMessages((curr) => {
@@ -200,7 +195,6 @@ export function useAssistantStream({ onTool }: { onTool?: (json: any) => void } 
   }, [onTool]);
 
   const send = useCallback(async (text: string) => {
-    // reinicia flags por cada mensaje del usuario
     flagsRef.current = { receivedText: false, receivedTool: false, emittedFallback: false };
 
     dlog("SEND ▶ user:", JSON.stringify(text));
@@ -220,23 +214,32 @@ export function useAssistantStream({ onTool }: { onTool?: (json: any) => void } 
           dlog("mapped type:", type);
 
           if (type === "delta") {
+            // Crear burbuja y pegar token
             ensureAssistantPlaceholder();
-            const piece = pickText(payload);
+            const piece = pickText(payload); // ← ahora soporta payload.value
             if (piece) appendAssistantText(piece);
             return;
           }
 
           if (type === "tool") {
-            ensureAssistantPlaceholder(); // para poder poner fallback si no hay texto
+            // Deja burbuja para posible fallback si no llega texto
+            ensureAssistantPlaceholder();
             handleTool(payload);
             return;
           }
 
           if (type === "done") {
+            // NUEVO: si el evento final trae texto, úsalo
+            const finalText = pickText(payload) || payload?.text || payload?.message || payload?.value || "";
+            if (finalText && !flagsRef.current.receivedText) {
+              ensureAssistantPlaceholder();
+              appendAssistantText(finalText);
+            }
+
             setStreaming(false);
             abortRef.current = null;
             dlog("DONE ⏹ flags:", { ...flagsRef.current });
-            maybeEmitFallback(); // solo si no hubo texto; respeta flags
+            maybeEmitFallback();
             return;
           }
 
@@ -250,12 +253,10 @@ export function useAssistantStream({ onTool }: { onTool?: (json: any) => void } 
           }
 
           if (type === "meta") {
-            // meta (threadId, etc.) → sin cambios visuales
             dlog("meta:", safePreview(payload));
             return;
           }
 
-          // Diagnóstico: evento no mapeado
           console.debug("[stream unknown evt]", evt, safePreview(payload));
         },
         onError: (err: any) => {
