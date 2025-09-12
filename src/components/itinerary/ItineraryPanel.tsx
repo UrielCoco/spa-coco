@@ -1,11 +1,12 @@
-import { useRef, useEffect } from "react"
-import SummaryCard from "./SummaryCard"
-import FlightsCard from "./FlightsCard"
-import DayPlanCard from "./DayPlanCard"
-import TransportCard from "./TransportCard"
-import ExtrasCard from "./ExtrasCard"
-import MapSection from "./MapSection"
-import { Button } from "@/components/common/Button"
+import { useRef, useEffect } from "react";
+import SummaryCard from "./SummaryCard";
+import FlightsCard from "./FlightsCard";
+import DayPlanCard from "./DayPlanCard";
+import TransportCard from "./TransportCard";
+import ExtrasCard from "./ExtrasCard";
+import MapSection from "./MapSection";
+import { Button } from "@/components/common/Button";
+import ToolDebugPane from "@/components/ToolDebugPane"; // 👈 NUEVO
 
 const sections = [
   { id: "summary", label: "Resumen" },
@@ -14,31 +15,30 @@ const sections = [
   { id: "transports", label: "Transportes" },
   { id: "extras", label: "Extras" },
   { id: "map", label: "Mapa" },
-]
+];
 
 export default function ItineraryPanel() {
-  const containerRef = useRef<HTMLDivElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const scrollTo = (id: string) => {
-    const el = document.getElementById(id)
-    if (!el || !containerRef.current) return
-    const top = el.offsetTop - 64 // compensar el sticky nav
-    containerRef.current.scrollTo({ top, behavior: "smooth" })
-  }
+    const el = document.getElementById(id);
+    if (!el || !containerRef.current) return;
+    const top = el.offsetTop - 64;
+    containerRef.current.scrollTo({ top, behavior: "smooth" });
+  };
 
-  // focus outline para accesibilidad con teclado
   useEffect(() => {
-    const node = containerRef.current
-    if (!node) return
-    node.tabIndex = 0
-  }, [])
+    const node = containerRef.current;
+    if (!node) return;
+    node.tabIndex = 0;
+  }, []);
 
   return (
-    <div className="h-full flex flex-col">
-      {/* barra sticky de navegación de secciones */}
+    <div className="h-full flex flex-col relative">
+      {/* barra sticky de navegación */}
       <div className="sticky top-0 z-10 bg-background/80 backdrop-blur border-b border-black/10">
         <div className="flex items-center gap-2 px-4 py-2 overflow-auto">
-          {sections.map(s => (
+          {sections.map((s) => (
             <Button
               key={s.id}
               variant="ghost"
@@ -72,6 +72,9 @@ export default function ItineraryPanel() {
           <MapSection />
         </section>
       </div>
+
+      {/* Visor de JSON crudo */}
+      <ToolDebugPane />
     </div>
-  )
+  );
 }
