@@ -3,7 +3,6 @@ import ChatPanel from '@/components/chat/ChatPanel'
 import ItineraryPanel from '@/components/itinerary/ItineraryPanel'
 import ExportBar from '@/components/itinerary/ExportBar'
 import { useItinerary } from '@/store/itinerary.store'
-import { mergeItinerary } from '@/services/parsers'
 import { useTranslation } from 'react-i18next'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useState } from 'react'
@@ -12,8 +11,6 @@ export default function Home() {
   const { t, i18n } = useTranslation('common')
   const it = useItinerary(s => s.itinerary)
   const [tab, setTab] = useState('chat')
-
-  const onTool = (json: any) => console.debug("[tool]", json)
 
   return (
     <div className="h-screen flex flex-col">
@@ -24,7 +21,11 @@ export default function Home() {
         </div>
         <div className="flex items-center gap-3">
           <ExportBar />
-          <select className="border rounded-2xl h-10 px-3" value={i18n.language} onChange={e => i18n.changeLanguage(e.target.value)}>
+          <select
+            className="border rounded-2xl h-10 px-3"
+            value={i18n.language}
+            onChange={e => i18n.changeLanguage(e.target.value)}
+          >
             <option value="es">ES</option>
             <option value="en">EN</option>
           </select>
@@ -33,16 +34,29 @@ export default function Home() {
 
       {/* Desktop split */}
       <ResizableSplit
-        left={<ChatPanel onTool={onTool} />}
+        left={<ChatPanel />}
         right={<ItineraryPanel />}
       />
 
       {/* Mobile tabs */}
       <div className="md:hidden h-[calc(100vh-72px)]">
         <Tabs value={tab} onValueChange={setTab}>
-          <div className="p-2"><TabsList><TabsTrigger value="chat">{t('chat')}</TabsTrigger><TabsTrigger value="itinerary">{t('itinerary')}</TabsTrigger></TabsList></div>
-          <TabsContent value="chat"><div className="h-[calc(100vh-132px)]"><ChatPanel onTool={onTool} /></div></TabsContent>
-          <TabsContent value="itinerary"><div className="h-[calc(100vh-132px)] overflow-auto"><ItineraryPanel /></div></TabsContent>
+          <div className="p-2">
+            <TabsList>
+              <TabsTrigger value="chat">{t('chat')}</TabsTrigger>
+              <TabsTrigger value="itinerary">{t('itinerary')}</TabsTrigger>
+            </TabsList>
+          </div>
+          <TabsContent value="chat">
+            <div className="h-[calc(100vh-132px)]">
+              <ChatPanel />
+            </div>
+          </TabsContent>
+          <TabsContent value="itinerary">
+            <div className="h-[calc(100vh-132px)] overflow-auto">
+              <ItineraryPanel />
+            </div>
+          </TabsContent>
         </Tabs>
       </div>
     </div>
