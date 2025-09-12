@@ -1,35 +1,95 @@
 import React, { useMemo, useRef, useState } from "react";
-import { useAssistantStream } from "@/hooks/useAssistantStream";
+import { useAssistantStream, type Message as Msg } from "@/hooks/useAssistantStream";
 
-type Message = { role: "user" | "assistant" | "system"; content: string };
+export default function ChatPanel() {
+  const { start } = useAssistantStream();
 
-type Props = {
-  onTool?: (json: any) => void;
-};
-
-export default function ChatPanel({ onTool }: Props) {
-  const { start } = useAssistantStream(); // 👈 firma: start({ messages })
+  // Arrancamos SIN mensaje inicial, como pediste
+  const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
-  const [messages, setMessages] = useState<Message[]>([
-    { role: "assistant", content: "¡Hola! ¿En qué puedo ayudarte con tu viaje hoy?" },
-  ]);
-
   const canSend = useMemo(() => input.trim().length > 0, [input]);
+
+  const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const scrollToEnd = () => {
+    requestAnimationFrame(() => {
+      const el = listRef.current;
+      if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    });
+  };
+
+  // ===== Callbacks que el hook usa para pintar el assistant =====
+  const ensureAssistantPlaceholder = () => {
+    setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+    scrollToEnd();
+  };
+
+  const appendAssistantText = (chunk: string) => {
+    setMessages((prev) => {
+      if (prev.length === 0) return prev;
+      const next = [...prev];
+      const lastIdx = next.length - 1;
+      // Asegura que el último sea assistant; si no, crea uno
+      if (next[lastIdx]?.role !== "assistant") {
+        next.push({ role: "assistant", content: chunk });
+      } else {
+        next[lastIdx] = {
+          ...next[lastIdx],
+          content: (next[lastIdx].content || "") + chunk,
+        };
+      }
+      return next;
+    });
+    scrollToEnd();
+  };
+
+  const finalizeAssistantMessage = (finalText: string) => {
+    // Si el server no manda texto final (text: ""), dejamos el acumulado tal cual.
+    if (!finalText) {
+      scrollToEnd();
+      return;
+    }
+    setMessages((prev) => {
+      if (prev.length === 0) return prev;
+      const next = [...prev];
+      const lastIdx = next.length - 1;
+      if (next[lastIdx]?.role === "assistant") {
+        next[lastIdx] = { ...next[lastIdx], content: finalText };
+      }
+      return next;
+    });
+    scrollToEnd();
+  };
+  // =============================================================
 
   async function send() {
     const text = input.trim();
     if (!text) return;
-    const next: Message[] = [...messages, { role: "user", content: text }];
 
-    setMessages(next);
+    const nextMsgs: Msg[] = [...messages, { role: "user", content: text }];
+    setMessages(nextMsgs);
     setInput("");
+    scrollToEnd();
 
-    // Sólo mandamos { messages }, sin 'streaming' ni 'send'
-    await start({ messages: next });
-
-    // Si quieres, vuelve a enfocar el input
-    inputRef.current?.focus();
+    try {
+      await start(
+        { messages: nextMsgs },
+        {
+          // Lo importante: pasamos los callbacks
+          ensureAssistantPlaceholder,
+          appendAssistantText,
+          finalizeAssistantMessage,
+          // Si quieres ver logs extra en consola:
+          onDebug: (d) => console.log("[ChatPanel debug]", d),
+          onError: (e) => console.error("[ChatPanel error]", e),
+        }
+      );
+    } catch (e) {
+      console.error(e);
+    } finally {
+      inputRef.current?.focus();
+    }
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -41,11 +101,12 @@ export default function ChatPanel({ onTool }: Props) {
 
   return (
     <div className="h-full flex flex-col">
-      <div className="flex-1 overflow-auto p-4 space-y-3">
-        {messages.map((m: Message, idx: number) => (
+      {/* Lista de mensajes */}
+      <div ref={listRef} className="flex-1 overflow-auto p-4 space-y-3">
+        {messages.map((m, idx) => (
           <div
             key={`${m.role}-${idx}`}
-            className={`max-w-[80%] rounded-2xl px-4 py-3 ${
+            className={`max-w-[80%] rounded-2xl px-4 py-3 whitespace-pre-wrap ${
               m.role === "user"
                 ? "ml-auto bg-black text-white"
                 : "mr-auto bg-black/5 text-black"
@@ -56,6 +117,7 @@ export default function ChatPanel({ onTool }: Props) {
         ))}
       </div>
 
+      {/* Input */}
       <div className="border-t p-3 flex gap-2">
         <input
           ref={inputRef}
