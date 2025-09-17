@@ -1,240 +1,299 @@
 // src/hooks/useAssistantStream.ts
-import { useCallback, useRef, useState } from 'react'
-import { useAssistantDebug } from '@/store/assistantDebug.store'
+/* eslint-disable no-console */
+import { useRef } from "react";
 
-export type Message = {
-  id: string
-  role: 'user' | 'assistant' | 'system'
-  content: string
-  createdAt: number
-}
-
-export interface UseAssistantStream {
-  messages: Message[]
-  isLoading: boolean
-  sendMessage: (text: string) => Promise<void>
-  clear: () => void
-}
-
-function logEvent(kind: string, data: unknown, runId?: string, threadId?: string) {
-  const addEvent = useAssistantDebug.getState().addEvent
-  addEvent({ kind: (kind as any) ?? 'debug', data, runId, threadId })
-}
-
-/** Añade un delta de texto al último mensaje assistant, o crea uno si no existe */
-function pushTextDelta(setMessages: React.Dispatch<React.SetStateAction<Message[]>>, delta: string) {
-  if (!delta) return
-  setMessages((m) => {
-    const last = m[m.length - 1]
-    if (!last || last.role !== 'assistant') {
-      const assistantMsg: Message = {
-        id: crypto.randomUUID?.() || Math.random().toString(36).slice(2),
-        role: 'assistant',
-        content: delta,
-        createdAt: Date.now(),
-      }
-      return [...m, assistantMsg]
-    }
-    const copy = m.slice()
-    copy[copy.length - 1] = { ...last, content: last.content + delta }
-    return copy
-  })
-}
-
-/** Intenta extraer texto de distintos formatos de evento */
-function extractText(ev: any): string | null {
-  if (!ev) return null
-
-  // Estándar Responses API:
-  if (ev.type === 'response.output_text.delta' && typeof ev.delta === 'string') return ev.delta
-  if (ev.type === 'response.delta' && typeof ev.delta?.text === 'string') return ev.delta.text
-
-  // AI SDK (Vercel) formatos comunes:
-  if (typeof ev.textDelta === 'string') return ev.textDelta
-  if (ev.type === 'text-delta' && typeof ev.delta === 'string') return ev.delta
-
-  // Algunos backends mandan "content": "..."
-  if (typeof ev.content === 'string') return ev.content
-
-  // message.delta con content array (OpenAI assistants/msg):
-  const arr = ev?.delta?.content
-  if (Array.isArray(arr)) {
-    for (const c of arr) {
-      if (typeof c?.text === 'string') return c.text
-      if (typeof c?.value === 'string') return c.value
-    }
+// ✔️ Tap para la tercera columna (historial completo)
+let addAssistantEvent:
+  | ((e: { kind: string; data: any; runId?: string; threadId?: string }) => void)
+  | undefined;
+try {
+  // @ts-ignore – carga perezosa si existe
+  const dbg = require("@/store/assistantDebug.store");
+  if (dbg?.useAssistantDebug?.getState) {
+    addAssistantEvent = dbg.useAssistantDebug.getState().addEvent;
   }
-
-  // Por si alguien manda { answer: "..." }
-  if (typeof ev.answer === 'string') return ev.answer
-
-  return null
+} catch {
+  // opcional
 }
 
-/** Procesa un evento (objeto ya parseado) */
-function handleParsedEvent(
-  obj: any,
-  setMessages: React.Dispatch<React.SetStateAction<Message[]>>
-) {
-  // Log para la tercera columna (intenta inferir run/thread si vienen)
-  const runId = obj?.response?.id || obj?.run_id
-  const threadId = obj?.response?.thread_id || obj?.thread_id
-  const kind = obj?.type || 'message'
-
-  logEvent(kind, obj, runId, threadId)
-
-  // Si trae delta de texto, lo empujamos al chat
-  const text = extractText(obj)
-  if (typeof text === 'string' && text.length) {
-    pushTextDelta(setMessages, text)
+// ✔️ Tap opcional que ya usabas para ver último tool payload (raw/parsed)
+let setLastToolRaw: ((s: string) => void) | undefined;
+let setLastToolParsed: ((v: any) => void) | undefined;
+try {
+  // @ts-ignore – cargamos perezosamente si existe
+  const mod = require("@/store/toolDebug.store");
+  if (mod?.useToolDebug?.getState) {
+    const st = mod.useToolDebug.getState();
+    setLastToolRaw = st.setLastToolRaw;
+    setLastToolParsed = st.setLastToolParsed;
   }
+} catch {
+  // el visor es opcional
 }
 
-/** Parser de SSE "puro" (event:/data:) y fallback NDJSON por línea */
-async function readStreamAndDispatch(
-  res: Response,
-  setMessages: React.Dispatch<React.SetStateAction<Message[]>>
-) {
-  const reader = res.body!.getReader()
-  const decoder = new TextDecoder()
+type Role = "user" | "assistant" | "system";
+export type Message = { role: Role; content: string };
 
-  let buffer = ''
+type StartPayload = {
+  messages: Message[];
+};
 
-  // Estados para SSE
-  let sseEventType: string | null = null
-  let sseDataLines: string[] = []
-  let usingSSE = false
+type Callbacks = {
+  /** Llamado cuando llega texto token a token */
+  onDelta?: (chunk: string) => void;
+  /** Llamado cuando el server envía done (con el texto final si lo hubo) */
+  onDone?: (finalText: string) => void;
+  /** Si quieres que el hook cree una burbuja placeholder antes de streamear texto */
+  ensureAssistantPlaceholder?: () => void;
+  /** Si quieres que el hook agregue texto a la última burbuja */
+  appendAssistantText?: (chunk: string) => void;
+  /** Si quieres cerrar/ajustar la última burbuja al terminar */
+  finalizeAssistantMessage?: (finalText: string) => void;
+  /** Llega cada “pedacito” de argumentos de tool */
+  onToolDelta?: (toolId: string, name: string | undefined, delta: string) => void;
+  /** Llega cuando la tool terminó con el JSON completo ya parseado (si se pudo) */
+  onToolCompleted?: (toolId: string, name: string | undefined, rawArgs: string, parsed: any | null) => void;
+  /** Logs extra del servidor */
+  onDebug?: (payload: any) => void;
+  /** Error de red o del stream */
+  onError?: (err: unknown) => void;
+};
 
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
+type SSEEvent = {
+  event: string; // "delta" | "tool_call.arguments.delta" | ...
+  data: any;
+};
 
-    // Partimos por líneas (soporta \n o \r\n)
-    let lineBreakIdx: number
-    while ((lineBreakIdx = buffer.search(/\r?\n/)) >= 0) {
-      const line = buffer.slice(0, lineBreakIdx)
-      buffer = buffer.slice(lineBreakIdx + (buffer[lineBreakIdx] === '\r' ? 2 : 1))
-
-      const trimmed = line.trim()
-
-      // Intento de detección de protocolo SSE
-      if (trimmed.startsWith('event:') || trimmed.startsWith('data:') || trimmed === '') {
-        usingSSE = true
-      }
-
-      if (usingSSE) {
-        // Parseo SSE
-        if (trimmed.startsWith('event:')) {
-          sseEventType = trimmed.slice(6).trim()
-          continue
-        }
-        if (trimmed.startsWith('data:')) {
-          sseDataLines.push(trimmed.slice(5).trim())
-          continue
-        }
-        // Línea en blanco = fin de evento SSE
-        if (trimmed === '') {
-          const dataStr = sseDataLines.join('\n')
-          sseDataLines = []
-          const type = sseEventType || 'message'
-          sseEventType = null
-
-          if (!dataStr || dataStr === '[DONE]') {
-            // Algunos backends envían [DONE] al final
-            handleParsedEvent({ type: 'response.completed' }, setMessages)
-            continue
-          }
-
-          try {
-            const obj = JSON.parse(dataStr)
-            // Normalizamos: si el backend no manda "type", usamos el del SSE
-            if (!obj.type) obj.type = type
-            handleParsedEvent(obj, setMessages)
-          } catch {
-            // data no-JSON; lo registramos como texto plano
-            handleParsedEvent({ type, content: dataStr }, setMessages)
-          }
-          continue
-        }
-      } else {
-        // Fallback NDJSON (una línea = un objeto)
-        if (!trimmed) continue
-        try {
-          const obj = JSON.parse(trimmed)
-          handleParsedEvent(obj, setMessages)
-        } catch {
-          // Línea no-JSON; la guardamos como debug
-          logEvent('debug', { line: trimmed })
-        }
+function parseEventLines(buf: string): SSEEvent[] {
+  const events: SSEEvent[] = [];
+  const parts = buf.split("\n\n");
+  for (const part of parts) {
+    if (!part.trim()) continue;
+    let event = "message";
+    let dataLine = "";
+    for (const line of part.split("\n")) {
+      if (line.startsWith("event:")) {
+        event = line.slice(6).trim();
+      } else if (line.startsWith("data:")) {
+        dataLine += line.slice(5).trim();
       }
     }
-  }
-
-  // Si quedó algo en buffer (NDJSON) intenta parsear
-  if (!usingSSE && buffer.trim()) {
+    if (!dataLine) continue;
     try {
-      const obj = JSON.parse(buffer.trim())
-      handleParsedEvent(obj, setMessages)
-    } catch {
-      logEvent('debug', { line: buffer.trim() })
+      const data = JSON.parse(dataLine);
+      events.push({ event, data });
+    } catch (e) {
+      console.warn("[useAssistantStream] JSON.parse error:", e, dataLine);
     }
   }
+  return events;
 }
 
-export default function useAssistantStream(): UseAssistantStream {
-  const [messages, setMessages] = useState<Message[]>([])
-  const [isLoading, setIsLoading] = useState(false)
-  const controllerRef = useRef<AbortController | null>(null)
+function tap(kind: string, data: any, runId?: string, threadId?: string) {
+  try {
+    addAssistantEvent?.({ kind: kind as any, data, runId, threadId });
+  } catch {}
+}
 
-  const clear = useCallback(() => {
-    controllerRef.current?.abort()
-    controllerRef.current = null
-    setMessages([])
-  }, [])
+export function useAssistantStream() {
+  const readingRef = useRef(false);
 
-  const sendMessage = useCallback(async (text: string) => {
-    setIsLoading(true)
-
-    // Empuja mensaje de usuario al chat
-    const userMsg: Message = {
-      id: crypto.randomUUID?.() || Math.random().toString(36).slice(2),
-      role: 'user',
-      content: text,
-      createdAt: Date.now(),
+  async function start(
+    payload: StartPayload,
+    cb: Callbacks = {}
+  ): Promise<void> {
+    if (readingRef.current) {
+      console.warn("[useAssistantStream] stream ya activo; se iniciará otro de todos modos.");
     }
-    setMessages((m) => [...m, userMsg])
 
-    controllerRef.current = new AbortController()
-    const signal = controllerRef.current.signal
+    const lastText = payload.messages.at(-1)?.content ?? "(sin texto)";
+    console.log("[useAssistantStream] SEND » user:", lastText);
+    tap("response.start", { message: lastText });
+
+    const res = await fetch("/api/spa-chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok || !res.body) {
+      const msg = `Stream HTTP error ${res.status}`;
+      console.error("[useAssistantStream] ERROR:", msg);
+      cb.onError?.(msg);
+      tap("error", { message: msg });
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    readingRef.current = true;
+
+    // buffers por toolId
+    const toolBuffers: Record<string, { name?: string; args: string }> = {};
+
+    // flags para UI
+    let createdPlaceholder = false;
+    let receivedAnyText = false;
+
+    const ensurePlaceholder = () => {
+      if (createdPlaceholder) return;
+      createdPlaceholder = true;
+      console.log("[useAssistantStream] ensurePlaceholder → creando burbuja assistant vacía");
+      cb.ensureAssistantPlaceholder?.();
+    };
 
     try {
-      // 👉 Ajusta esta URL a tu endpoint real (POST que devuelve SSE)
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text }),
-        signal,
-      })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      if (!res.body) throw new Error('La respuesta no trae body (stream).')
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
 
-      // Marca inicio en la columna de debug
-      logEvent('response.start', { message: text })
+        // Procesa cualquier evento completo en el buffer
+        const lastDoubleBreak = buffer.lastIndexOf("\n\n");
+        if (lastDoubleBreak === -1) continue;
 
-      // Lee el stream (soporta SSE y NDJSON)
-      await readStreamAndDispatch(res, setMessages)
+        const chunk = buffer.slice(0, lastDoubleBreak + 2);
+        buffer = buffer.slice(lastDoubleBreak + 2);
 
-      // Fin
-      logEvent('response.completed', {})
-    } catch (err: any) {
-      logEvent('error', { message: String(err), err })
-      pushTextDelta(setMessages, 'Hubo un problema al procesar la respuesta.')
+        const evts = parseEventLines(chunk);
+        for (const { event, data } of evts) {
+          // Logs uniformes
+          console.log("[SSE evt]", event, data);
+
+          // Tap para la columna de debug (normalizamos un poco)
+          const mappedKind =
+            event === "delta"
+              ? "response.delta"
+              : event === "done"
+              ? "response.completed"
+              : event.startsWith("tool_call.")
+              ? (event === "tool_call.completed" ? "tool_result" : "tool_call")
+              : event;
+
+          tap(mappedKind, { ...data, _event: event });
+
+          switch (event) {
+            case "meta": {
+              // opcional
+              break;
+            }
+
+            case "delta": {
+              const val = String(data?.value ?? "");
+              if (!val) break;
+              receivedAnyText = true;
+              cb.onDelta?.(val);
+              ensurePlaceholder();
+              cb.appendAssistantText?.(val);
+              break;
+            }
+
+            // 🔧 Tool args (normalizado por el server)
+            case "tool_call.arguments.delta": {
+              const id: string = data?.id ?? "unknown";
+              const name: string | undefined = data?.name;
+              const d: string = String(data?.arguments?.delta ?? "");
+              const b = (toolBuffers[id] ||= { name, args: "" });
+              if (name && !b.name) b.name = name;
+              b.args += d;
+              cb.onToolDelta?.(id, b.name, d);
+              break;
+            }
+
+            case "tool_call.completed": {
+              const id: string = data?.id ?? "unknown";
+              const name: string | undefined = data?.name;
+              let rawArgs: string =
+                typeof data?.arguments === "string" ? data.arguments : "";
+
+              // Si veníamos acumulando deltas, preferimos el buffer
+              const b = (toolBuffers[id] ||= { name, args: "" });
+              if (b.args && b.args.length > 0) rawArgs = b.args;
+
+              if (setLastToolRaw) setLastToolRaw(rawArgs);
+
+              let parsed: any = null;
+              try {
+                parsed = rawArgs ? JSON.parse(rawArgs) : null;
+                if (setLastToolParsed) setLastToolParsed(parsed);
+              } catch (e) {
+                console.warn("[useAssistantStream] tool args no son JSON válido:", e);
+              }
+
+              // Merge con la UI si viene partial
+              try {
+                if (parsed?.partial) {
+                  const CV = (window as any).CV;
+                  if (CV?.mergeItinerary) {
+                    CV.mergeItinerary(parsed);
+                  }
+                }
+              } catch (e) {
+                console.error("[useAssistantStream] mergeItinerary error:", e);
+              }
+
+              cb.onToolCompleted?.(id, name, rawArgs, parsed);
+              break;
+            }
+
+            case "done": {
+              const finalText = String(data?.text ?? "");
+              cb.onDone?.(finalText);
+              if (finalText) {
+                ensurePlaceholder();
+                cb.appendAssistantText?.(""); // no-op por si quieres cerrar estilos
+                cb.finalizeAssistantMessage?.(finalText);
+              }
+              break;
+            }
+
+            case "error": {
+              console.error("[useAssistantStream] stream error:", data);
+              cb.onError?.(data);
+              break;
+            }
+
+            case "debug": {
+              console.log("[useAssistantStream] mapped type: unknown");
+              console.log("[stream unknown evt] debug", data);
+              cb.onDebug?.(data);
+              break;
+            }
+
+            default: {
+              // fallback: algunos navegadores entregan como "message"
+              try {
+                if (data?.value) {
+                  const val = String(data.value);
+                  receivedAnyText = true;
+                  cb.onDelta?.(val);
+                  ensurePlaceholder();
+                  cb.appendAssistantText?.(val);
+                } else {
+                  cb.onDebug?.({ event, data });
+                }
+              } catch (e) {
+                cb.onDebug?.({ event, data, error: String(e) });
+              }
+              break;
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error("[useAssistantStream] read error:", err);
+      cb.onError?.(err);
+      tap("error", { message: String(err) });
     } finally {
-      setIsLoading(false)
-      controllerRef.current = null
-    }
-  }, [])
+      readingRef.current = false;
 
-  return { messages, isLoading, sendMessage, clear }
+      // Si no recibimos nada de texto, avisa por si quieres hacer algo en la UI
+      if (!receivedAnyText) {
+        cb.onDone?.("");
+      }
+    }
+  }
+
+  return { start };
 }
