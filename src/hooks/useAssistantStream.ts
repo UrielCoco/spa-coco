@@ -1,7 +1,6 @@
-// src/hooks/useAssistantStream.ts
 /* eslint-disable no-console */
 import { useCallback, useRef, useState } from 'react'
-import { useAssistantDebug } from '@/store/assistantDebug.store'   // ✅ import estático
+import { useAssistantDebug } from '@/store/assistantDebug.store'
 
 export type Message = {
   role: 'user' | 'assistant' | 'system'
@@ -29,8 +28,8 @@ export function useAssistantStream(): UseAssistantStream {
   const readingRef = useRef(false)
   const [_, setVersion] = useState(0)
   const force = () => setVersion((v) => v + 1)
-  const { addEvent } = useAssistantDebug()
 
+  const { addEvent } = useAssistantDebug()
   const tap = useCallback(
     (kind: any, data?: any, runId?: string, threadId?: string) => {
       try {
@@ -61,7 +60,47 @@ export function useAssistantStream(): UseAssistantStream {
     return out
   }
 
-  // 👇 Usa BASE=/api (tu var) y compone el endpoint /spa-chat
+  // ============ 🔎 Extractores tolerantes ======================
+  function extractTextChunk(data: any): string {
+    // muchos backends mandan en distintos campos:
+    // - data.value, data.text, data.delta
+    // - data.output_text (OpenAI responses API)
+    // - data.content[0].text.value (Assistants/messages)
+    const candidates = [
+      data?.value,
+      data?.text,
+      data?.delta,
+      data?.output_text,
+      data?.output?.[0]?.content?.[0]?.text?.value,
+      data?.content?.[0]?.text?.value,
+      data?.message?.content?.[0]?.text?.value,
+    ]
+    for (const c of candidates) {
+      if (typeof c === 'string' && c.length) return c
+      if (Array.isArray(c)) {
+        const joined = c.filter((v) => typeof v === 'string').join('')
+        if (joined) return joined
+      }
+    }
+    return ''
+  }
+
+  function extractFinalText(data: any): string {
+    // para eventos “completed/done” que traen el texto completo
+    const whole =
+      data?.text ??
+      data?.value ??
+      data?.output_text ??
+      data?.output?.map((o: any) =>
+        o?.content?.map((p: any) => p?.text?.value || '').join('')
+      ).join('') ??
+      data?.content?.map((p: any) => p?.text?.value || '').join('') ??
+      ''
+    return typeof whole === 'string' ? whole : ''
+  }
+  // =============================================================
+
+  // BASE=/api (tu var en Vercel) → componemos /spa-chat
   const BASE = (import.meta.env.VITE_ASSISTANT_BASE_URL as string) || '/api'
   const ENDPOINT = `${BASE.replace(/\/$/, '')}/spa-chat`
 
@@ -69,7 +108,7 @@ export function useAssistantStream(): UseAssistantStream {
     payload: { messages: Message[] },
     cb: UseAssistantStream['start'] extends (...args: infer _A) => any ? Parameters<UseAssistantStream['start']>[1] : never = {}
   ) {
-    if (readingRef.current) console.warn('[useAssistantStream] otro stream estaba activo; continuamos…')
+    if (readingRef.current) console.warn('[useAssistantStream] otro stream activo; continuamos…')
 
     const lastUser = payload.messages.at(-1)?.content ?? ''
     tap('response.start', { message: lastUser })
@@ -95,6 +134,7 @@ export function useAssistantStream(): UseAssistantStream {
     const toolBuf: Record<string, { name?: string; args: string }> = {}
     let createdPlaceholder = false
     let gotAnyText = false
+    let builtText = '' // acumulador “universal” (por si no llegan deltas clásicos)
 
     const ensurePlaceholder = () => {
       if (createdPlaceholder) return
@@ -124,15 +164,43 @@ export function useAssistantStream(): UseAssistantStream {
           tap(mapped, { ...data, _event: event }, data?.run_id, data?.thread_id)
 
           switch (event) {
+            // === Texto tipo “clásico” ===
             case 'delta': {
               const val = String(data?.value ?? '')
               if (!val) break
               gotAnyText = true
+              builtText += val
               cb?.onDelta?.(val)
               ensurePlaceholder()
               cb?.appendAssistantText?.(val)
               break
             }
+
+            // === Texto en Responses API ===
+            case 'response.output_text.delta':
+            case 'message.delta': {
+              const val = extractTextChunk(data)
+              if (!val) break
+              gotAnyText = true
+              builtText += val
+              ensurePlaceholder()
+              cb?.appendAssistantText?.(val)
+              break
+            }
+
+            // === Cierre de texto en Responses/Assistants ===
+            case 'response.output_text.done':
+            case 'message.completed': {
+              const final = extractFinalText(data) || builtText
+              if (final) {
+                gotAnyText = true
+                ensurePlaceholder()
+                cb?.finalizeAssistantMessage?.(final)
+              }
+              break
+            }
+
+            // === Herramientas ===
             case 'tool_call.arguments.delta': {
               const id: string = data?.id ?? 'unknown'
               const name: string | undefined = data?.name
@@ -152,35 +220,34 @@ export function useAssistantStream(): UseAssistantStream {
               let parsed: any = null
               try { parsed = rawArgs ? JSON.parse(rawArgs) : null } catch {}
               cb?.onToolCompleted?.(id, name, rawArgs, parsed)
+              break
+            }
 
-              // Hook opcional por si existe window.CV.mergeItinerary
-              try {
-                if (parsed?.partial) {
-                  const CV = (window as any).CV
-                  if (CV?.mergeItinerary) CV.mergeItinerary(parsed)
-                }
-              } catch (e) {
-                console.error('[mergeItinerary] error:', e)
-              }
-              break
-            }
-            case 'done': {
-              const finalText = String(data?.text ?? '')
-              cb?.onDone?.(finalText)
-              if (finalText) {
+            // === Fin del stream ===
+            case 'done':
+            case 'response.completed': {
+              // algunos backends mandan {} aquí; si ya acumulamos texto, lo cerramos
+              const final = extractFinalText(data) || builtText
+              cb?.onDone?.(final)
+              if (final) {
                 ensurePlaceholder()
-                cb?.finalizeAssistantMessage?.(finalText)
+                cb?.finalizeAssistantMessage?.(final)
               }
               break
             }
+
+            // === Errores ===
             case 'error': {
               cb?.onError?.(data)
               break
             }
+
+            // === Cualquier otro evento con posible texto ===
             default: {
-              const val = typeof data?.value === 'string' ? data.value : ''
+              const val = extractTextChunk(data)
               if (val) {
                 gotAnyText = true
+                builtText += val
                 ensurePlaceholder()
                 cb?.appendAssistantText?.(val)
               } else {
