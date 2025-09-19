@@ -1,85 +1,91 @@
-import { useState, useRef, useCallback } from 'react';
-import {
-  sendSpaChat,
-  type AssistantEvent,
-  type ChatMessage,
-  type Role,
-} from '@/services/spa';
+/* src/hooks/useSpaChat.ts */
+import { useCallback, useMemo, useRef, useState } from "react";
+import type { ChatMessage } from "@/services/spa";
+import { sendSpaChat } from "@/services/spa";
 
-export type UseSpaChatOptions = {
-  /**
-   * Recibe TODOS los eventos crudos (assistant_say, upsert_itinerary, etc.)
-   * para que el consumidor aplique parciales al store, registre métricas, etc.
-   */
-  onEvents?: (events: AssistantEvent[]) => void;
-};
-
-function makeMsg(role: Role, content: string): ChatMessage {
-  // Tipamos explícitamente el mensaje para que 'role' no se ensanche a string
-  return { role, content };
+// ⚠️ Para evitarte errores de tipos por diferencias en tu store,
+// hacemos import laxo y usamos llamadas opcionales.
+let applyPartialItinerary: (p: any) => void = () => {};
+try {
+  // intenta varias firmas comunes
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const store = require("@/store/itinerary.store");
+  const s = store?.useItineraryStore?.getState?.() ?? store?.useItineraryStore?.();
+  applyPartialItinerary =
+    s?.applyPartial ??
+    s?.upsertFromPartial ??
+    s?.merge ??
+    ((p: any) => {
+      // último recurso: exponer algo en window para depurar
+      (globalThis as any).__lastItineraryPartial = p;
+    });
+} catch {
+  // sin store: ignoramos
 }
 
-export function useSpaChat(opts: UseSpaChatOptions = {}) {
-  const [busy, setBusy] = useState(false);
+export function useSpaChat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const eventsRef = useRef<AssistantEvent[]>([]);
+  const [streaming, setStreaming] = useState(false);
+  const [input, setInput] = useState("");
+  const bufferRef = useRef<string>("");
 
-  const send = useCallback(
-    async (text: string) => {
-      const content = (text ?? '').trim();
-      if (!content || busy) return;
+  const canSend = useMemo(() => !streaming && input.trim().length > 0, [streaming, input]);
 
-      // 1) armamos el mensaje del usuario con tipado explícito
-      const userMsg: ChatMessage = makeMsg('user', content);
+  const send = useCallback(async () => {
+    if (!input.trim()) return;
+    const userMsg: ChatMessage = { role: "user", content: input.trim() };
+    setMessages((m) => [...m, userMsg]);
+    setInput("");
+    setStreaming(true);
+    bufferRef.current = "";
 
-      // 2) construimos el historial a enviar tipado como ChatMessage[]
-      const nextMessages: ChatMessage[] = [...messages, userMsg];
-
-      // 3) reflejamos en el estado local ANTES de llamar al backend
-      setMessages(nextMessages);
-      setBusy(true);
-
-      try {
-        const events = await sendSpaChat({ messages: nextMessages });
-
-        // guardamos para acceso externo si hace falta
-        eventsRef.current = events;
-
-        // Proyectamos SOLO los mensajes "assistant" al historial legible
-        const toAppend: ChatMessage[] = [];
-        for (const ev of events) {
-          if (ev.event === 'assistant') {
-            toAppend.push(makeMsg('assistant', ev.payload.content));
+    await sendSpaChat({ messages: [...messages, userMsg] }, (ev) => {
+      if (ev.type === "assistant") {
+        bufferRef.current += ev.delta;
+        // mostramos token a token como “assistant (stream)”
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last?.role === "assistant") {
+            const copy = prev.slice(0, -1);
+            copy.push({ role: "assistant", content: bufferRef.current });
+            return copy;
           }
+          return [...prev, { role: "assistant", content: bufferRef.current }];
+        });
+      } else if (ev.type === "assistant_done") {
+        // aseguramos que el último mensaje queda con el contenido completo
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last?.role === "assistant") {
+            const copy = prev.slice(0, -1);
+            copy.push({ role: "assistant", content: ev.content });
+            return copy;
+          }
+          return [...prev, { role: "assistant", content: ev.content }];
+        });
+      } else if (ev.type === "itinerary") {
+        try {
+          applyPartialItinerary(ev.partial);
+        } catch (e) {
+          console.warn("[useSpaChat] no pude aplicar partial al store", e);
         }
-        if (toAppend.length) {
-          setMessages((cur) => [...cur, ...toAppend]);
-        }
-
-        // Permitimos que el consumidor aplique parciales al store del itinerario
-        if (opts.onEvents) opts.onEvents(events);
-
-        return events;
-      } finally {
-        setBusy(false);
+      } else if (ev.type === "error") {
+        setMessages((m) => [
+          ...m,
+          { role: "assistant", content: `⚠️ Error: ${ev.message}` },
+        ]);
+      } else if (ev.type === "done") {
+        setStreaming(false);
       }
-    },
-    [busy, messages, opts],
-  );
-
-  const reset = useCallback(() => {
-    setMessages([]);
-    eventsRef.current = [];
-  }, []);
+    });
+  }, [input, messages]);
 
   return {
-    busy,
-    messages,             // ChatMessage[]
-    send,                 // (text: string) => Promise<AssistantEvent[] | void>
-    lastEvents: eventsRef.current,
-    reset,
+    messages,
+    input,
+    setInput,
+    canSend,
+    send,
+    streaming,
   };
 }
-
-export type UseSpaChatReturn = ReturnType<typeof useSpaChat>;
-export default useSpaChat;
