@@ -1,34 +1,21 @@
-import React, { useRef } from 'react'
-import { useItineraryStore } from '@/store/itinerary.store'
+import React, { useRef } from "react";
+import { useItinerary, downloadJSON } from "@/store/itinerary.store";
 
 export default function ExportBar() {
-  const fileRef = useRef<HTMLInputElement>(null)
-  const itinerary = useItineraryStore((s) => s.itinerary)
-  const loadFromJSON = useItineraryStore((s) => s.loadFromJSON)
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const loadFromJSON = useItinerary((s) => s.loadFromJSON);
 
-  const handleDownload = () => {
-    const blob = new Blob([JSON.stringify(itinerary, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    const title = itinerary?.meta?.tripTitle || 'itinerary'
-    a.download = `${title.replace(/\s+/g, '_').toLowerCase()}.json`
-    a.click()
-    URL.revokeObjectURL(url)
-  }
+  const onPickFile = () => fileRef.current?.click();
 
-  const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    const reader = new FileReader()
-    reader.onload = () => {
-      const text = String(reader.result || '')
-      loadFromJSON(text)
-    }
-    reader.readAsText(file)
-    // limpia el input para permitir re-subir el mismo archivo si hace falta
-    e.target.value = ''
-  }
+  const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    const text = await f.text();
+    // Reemplaza todo el itinerario con el JSON cargado
+    loadFromJSON(text, "replace");
+    // Limpia el input para poder volver a cargar el mismo archivo si hace falta
+    e.target.value = "";
+  };
 
   return (
     <div className="flex items-center gap-2">
@@ -37,22 +24,25 @@ export default function ExportBar() {
         type="file"
         accept="application/json"
         className="hidden"
-        onChange={handleUpload}
+        onChange={onFile}
       />
       <button
-        className="border rounded-2xl h-10 px-3 hover:bg-gray-50 transition"
-        onClick={() => fileRef.current?.click()}
+        type="button"
+        className="px-3 py-1 rounded border"
+        onClick={onPickFile}
         title="Cargar JSON"
       >
         Cargar JSON
       </button>
+
       <button
-        className="border rounded-2xl h-10 px-3 hover:bg-gray-50 transition"
-        onClick={handleDownload}
+        type="button"
+        className="px-3 py-1 rounded border"
+        onClick={() => downloadJSON()}
         title="Descargar JSON"
       >
         Descargar JSON
       </button>
     </div>
-  )
+  );
 }

@@ -1,65 +1,31 @@
-import React, { useState } from 'react'
-import ExportBar from '@/components/itinerary/ExportBar'
-import ItineraryPanel from '@/components/itinerary/ItineraryPanel'
-import ItineraryJsonView from '@/components/itinerary/ItineraryJsonView'
-import AssistantResponsesView from '@/debug/AssistantResponsesView'
-import { useItineraryStore } from '@/store/itinerary.store'
-// Si usas otro store para tool streaming, puedes mantenerlo; aquí muestro cómo con itinerary.store
-// o cambia por tu useToolDebug si ya lo tienes.
-
-import ChatPanel from '@/components/chat/ChatPanel'
+import React from "react";
+import ChatPanel from "@/components/chat/ChatPanel";
+import ItineraryJsonView from "@/components/itinerary/ItineraryJsonView";
+import ExportBar from "@/components/itinerary/ExportBar";
 
 export default function Home() {
-  const [showJson, setShowJson] = useState(false)
-  const streaming = useItineraryStore((s) => s.streaming)
-
   return (
-    <div className="h-screen w-full flex flex-col">
-      {/* Top Bar */}
-      <header className="h-16 border-b bg-white flex items-center px-4 gap-3">
-        <div className="font-medium">New Trip</div>
+    <div className="h-screen w-screen grid grid-cols-[320px_1fr_360px] grid-rows-[auto_1fr] gap-3 p-3">
+      {/* Header */}
+      <div className="col-span-3 flex items-center justify-between">
+        <h1 className="text-lg font-semibold">New Trip</h1>
+        <ExportBar />
+      </div>
 
-        <div className="ml-auto flex items-center gap-2">
-          {streaming ? (
-            <span className="text-xs px-2 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-              JSON stream activo
-            </span>
-          ) : (
-            <span className="text-xs px-2 py-1 rounded-full bg-neutral-50 text-neutral-700 border">
-              JSON stream inactivo
-            </span>
-          )}
+      {/* Izquierda: Chat */}
+      <div className="row-start-2 border rounded overflow-hidden">
+        <ChatPanel />
+      </div>
 
-          <ExportBar />
-          <button
-            className="border rounded-2xl h-10 px-3 hover:bg-gray-50 transition"
-            onClick={() => setShowJson((v) => !v)}
-            title={showJson ? 'Mostrar interfaz gráfica' : 'Mostrar JSON'}
-          >
-            {showJson ? 'UI' : 'JSON'}
-          </button>
-        </div>
-      </header>
+      {/* Centro: SIEMPRE el JSON del itinerario */}
+      <div className="row-start-2 border rounded overflow-hidden">
+        <ItineraryJsonView />
+      </div>
 
-      {/* Main: 3 columnas */}
-      <main className="flex-1 min-h-0">
-        <div className="h-full w-full grid grid-cols-[420px,1fr,480px]">
-          {/* Izquierda: Chat */}
-          <aside className="border-r bg-white/50 h-[calc(100vh-64px)] overflow-auto">
-            <ChatPanel />
-          </aside>
-
-          {/* Centro: Itinerario con toggle UI/JSON */}
-          <section className="h-[calc(100vh-64px)] overflow-auto">
-            {showJson ? <ItineraryJsonView /> : <ItineraryPanel />}
-          </section>
-
-          {/* Derecha: Respuestas crudas del Assistant */}
-          <aside className="border-l bg-white h-[calc(100vh-64px)] overflow-auto">
-            <AssistantResponsesView />
-          </aside>
-        </div>
-      </main>
+      {/* Derecha: aquí puedes seguir mostrando “Respuestas del Assistant (completas)” */}
+      <div className="row-start-2 border rounded p-3 text-sm text-muted-foreground">
+        <div>Sin eventos (aún)…</div>
+      </div>
     </div>
-  )
+  );
 }

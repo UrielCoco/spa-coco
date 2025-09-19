@@ -1,19 +1,20 @@
-import React from 'react'
-import { useItineraryStore, Itinerary } from '@/store/itinerary.store'
+import React from "react";
+import { useItinerary } from "@/store/itinerary.store";
 
 export default function MapSection() {
-  const lights: Itinerary['lights'] = useItineraryStore((s) => s.itinerary.lights)
+  const summary = useItinerary((s) => s.itinerary.summary ?? {});
+  const originCity = summary?.originCity || "—";
+  const returnCity = summary?.returnCity || "—";
 
   return (
-    <div className="p-4 border rounded-xl">
-      <div className="font-medium mb-2">Mapa</div>
-      <div className="text-sm text-neutral-600">
-        Origen: {lights?.originCity || '—'} ({lights?.originCountry || '—'}) ·
-        Retorno: {lights?.returnCity || '—'} ({lights?.returnCountry || '—'})
+    <section className="p-3">
+      <h3 className="mb-2 text-sm font-semibold">Mapa</h3>
+      <div className="text-sm">
+        Origen: {originCity} — Retorno: {returnCity}
       </div>
-      <div className="mt-3 text-xs text-neutral-500">
+      <div className="mt-2 text-xs text-muted-foreground">
         (Aquí podría ir un mapa embebido; por ahora mostramos metadatos.)
       </div>
-    </div>
-  )
+    </section>
+  );
 }

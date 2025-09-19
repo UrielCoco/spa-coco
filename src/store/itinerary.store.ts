@@ -1,83 +1,100 @@
-import { create } from 'zustand'
+import { create } from "zustand";
+import { persist } from "zustand/middleware";
 
-/** Tipos muy flexibles para no pelear con el JSON del asistente */
-export type AnyRec = Record<string, any>
+export type AnyRec = Record<string, any>;
 
-export type Itinerary = {
-  meta?: AnyRec
-  summary?: AnyRec
-  flights?: AnyRec[]
-  days?: AnyRec[]
-  transports?: AnyRec[]
-  extras?: AnyRec[]
-  lights?: AnyRec
+export interface Itinerary {
+  meta?: { tripTitle?: string; [k: string]: any };
+  summary?: AnyRec;
+  flights?: AnyRec[];
+  days?: AnyRec[];
+  transports?: AnyRec[];
+  extras?: AnyRec[];
+  lights?: AnyRec;
 }
 
-const EMPTY: Itinerary = {
-  meta: { tripTitle: 'New Trip' },
+export interface ItineraryStore {
+  itinerary: Itinerary;
+  /** Reemplaza todo el itinerario */
+  replace: (it: Itinerary) => void;
+  /** Merge superficial del itinerario */
+  merge: (partial: Partial<Itinerary>) => void;
+  /** Carga JSON (string u objeto). Por defecto reemplaza; con mode="merge" hace merge. */
+  loadFromJSON: (json: string | object, mode?: "replace" | "merge") => void;
+  /** Vuelve al estado inicial */
+  reset: () => void;
+}
+
+const INITIAL: Itinerary = {
+  meta: { tripTitle: "New Trip" },
   summary: {},
   flights: [],
   days: [],
   transports: [],
   extras: [],
   lights: {},
+};
+
+function normalize(it: Partial<Itinerary>): Itinerary {
+  return {
+    meta: it.meta ?? { tripTitle: "New Trip" },
+    summary: it.summary ?? {},
+    flights: Array.isArray(it.flights) ? it.flights : [],
+    days: Array.isArray(it.days) ? it.days : [],
+    transports: Array.isArray(it.transports) ? it.transports : [],
+    extras: Array.isArray(it.extras) ? it.extras : [],
+    lights: it.lights ?? {},
+  };
 }
 
-function deepMerge<T extends AnyRec>(base: T, patch: AnyRec): T {
-  const out: AnyRec = Array.isArray(base) ? [...(base as any)] : { ...base }
-  for (const [k, v] of Object.entries(patch ?? {})) {
-    if (v && typeof v === 'object' && !Array.isArray(v) && typeof out[k] === 'object' && !Array.isArray(out[k])) {
-      out[k] = deepMerge(out[k], v)
-    } else {
-      out[k] = v
-    }
-  }
-  return out as T
+export const useItinerary = create<ItineraryStore>()(
+  persist(
+    (set, get) => ({
+      itinerary: INITIAL,
+
+      replace: (it) => set({ itinerary: normalize(it) }),
+
+      merge: (partial) =>
+        set({ itinerary: normalize({ ...get().itinerary, ...partial }) }),
+
+      loadFromJSON: (json, mode = "replace") => {
+        let obj: any = json;
+        if (typeof json === "string") {
+          try {
+            obj = JSON.parse(json);
+          } catch {
+            console.warn("JSON inválido pasado a loadFromJSON");
+            return;
+          }
+        }
+        if (mode === "merge") {
+          const merged = { ...get().itinerary, ...obj };
+          set({ itinerary: normalize(merged) });
+        } else {
+          set({ itinerary: normalize(obj) });
+        }
+      },
+
+      reset: () => set({ itinerary: INITIAL }),
+    }),
+    { name: "itinerary-store" }
+  )
+);
+
+/** Utilidad opcional para descargar el JSON actual */
+export function downloadJSON(filename = "itinerary.json") {
+  const data = useItinerary.getState().itinerary;
+  const blob = new Blob([JSON.stringify(data, null, 2)], {
+    type: "application/json",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
-type State = {
-  itinerary: Itinerary
-  /** bandera opcional para tu UI */
-  streaming: boolean
-
-  /** Reemplaza todo el itinerario desde un objeto o string JSON */
-  loadFromJSON: (src: string | Itinerary) => void
-
-  /** Mezcla (deep-merge) un parcial dentro del itinerario actual */
-  mergeItinerary: (partial: Partial<Itinerary>) => void
-
-  /** Limpia al estado base */
-  reset: () => void
-
-  /** (opcional) marca streaming */
-  setStreaming: (v: boolean) => void
-}
-
-export const useItineraryStore = create<State>((set, get) => ({
-  itinerary: EMPTY,
-  streaming: false,
-
-  loadFromJSON: (src) => {
-    let obj: Itinerary
-    if (typeof src === 'string') {
-      try {
-        obj = JSON.parse(src)
-      } catch (e) {
-        console.error('JSON inválido en loadFromJSON', e)
-        return
-      }
-    } else {
-      obj = src
-    }
-    set({ itinerary: deepMerge(EMPTY, obj || {}) })
-  },
-
-  mergeItinerary: (partial) => {
-    const current = get().itinerary
-    set({ itinerary: deepMerge(current, partial || {}) })
-  },
-
-  reset: () => set({ itinerary: EMPTY }),
-
-  setStreaming: (v) => set({ streaming: v }),
-}))
+export type { Itinerary as ItineraryType };

@@ -1,19 +1,20 @@
-import React from 'react'
-import { useItineraryStore, Itinerary } from '@/store/itinerary.store'
+import React from "react";
+import { useItinerary } from "@/store/itinerary.store";
 
 export default function SummaryCard() {
-  const summary: Itinerary['summary'] = useItineraryStore((s) => s.itinerary.summary)
-  const meta: Itinerary['meta'] = useItineraryStore((s) => s.itinerary.meta)
+  const meta = useItinerary((s) => s.itinerary.meta ?? {});
+  const summary = useItinerary((s) => s.itinerary.summary ?? {});
+  const title = (meta as any)?.tripTitle || "New Trip";
+  const overview =
+    (summary as any)?.overview || (summary as any)?.notes || "Sin overview.";
 
   return (
-    <div className="p-4 border rounded-xl">
-      <div className="font-medium mb-2">Resumen</div>
+    <section className="p-3">
+      <h3 className="mb-2 text-sm font-semibold">Resumen</h3>
       <div className="text-sm">
-        <div className="mb-1">
-          <span className="text-neutral-500">Título:</span> {meta?.tripTitle || '—'}
-        </div>
-        <div className="whitespace-pre-wrap">{summary?.overview || 'Sin overview.'}</div>
+        <div className="text-slate-500">Título: {title}</div>
+        <div className="mt-1 whitespace-pre-wrap">{overview}</div>
       </div>
-    </div>
-  )
+    </section>
+  );
 }

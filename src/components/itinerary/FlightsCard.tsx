@@ -1,31 +1,23 @@
-import React from 'react'
-import { useItineraryStore, Itinerary } from '@/store/itinerary.store'
-
-type Flight = NonNullable<Itinerary['flights']>[number]
+import React from "react";
+import { useItinerary } from "@/store/itinerary.store";
 
 export default function FlightsCard() {
-  const flights = useItineraryStore((s) => (s.itinerary.flights ?? [])) as Flight[]
+  const flights = useItinerary((s) => s.itinerary.flights ?? []);
 
   return (
-    <div className="p-4 border rounded-xl">
-      <div className="font-medium mb-2">Vuelos</div>
-      {flights.length === 0 ? (
-        <div className="text-sm text-neutral-500">Aún no hay vuelos.</div>
-      ) : (
+    <section className="p-3">
+      <h3 className="mb-2 text-sm font-semibold">Vuelos</h3>
+      {Array.isArray(flights) && flights.length > 0 ? (
         <ul className="space-y-2">
-          {flights.map((f: Flight, i: number) => (
-            <li key={i} className="text-sm border rounded-lg p-3">
-              <div className="font-medium">
-                {(f as any)?.from?.code ?? (f as any)?.from ?? '---'} →
-                {(f as any)?.to?.code ? ' ' + (f as any)?.to?.code : ' ' + ((f as any)?.to ?? '---')}
-              </div>
-              <div className="text-neutral-600">
-                {(f as any)?.airline ?? '—'} · {(f as any)?.number ?? '—'} · {(f as any)?.date ?? '—'}
-              </div>
+          {flights.map((f: any, i: number) => (
+            <li key={i} className="rounded border p-2 text-sm">
+              {f?.code || f?.flight || "Vuelo"} — {f?.from?.city || f?.from} → {f?.to?.city || f?.to}
             </li>
           ))}
         </ul>
+      ) : (
+        <div className="text-sm text-muted-foreground">Aún no hay vuelos.</div>
       )}
-    </div>
-  )
+    </section>
+  );
 }

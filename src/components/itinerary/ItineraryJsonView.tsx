@@ -1,15 +1,29 @@
-import React from 'react'
-import { useItineraryStore, Itinerary } from '@/store/itinerary.store'
+import React from "react";
+import { useItinerary } from "@/store/itinerary.store";
 
+/**
+ * Muestra SOLO el JSON del itinerario desde el store.
+ * No renderiza ni mensajes ni eventos del chat.
+ */
 export default function ItineraryJsonView() {
-  // Tipamos explícitamente para evitar "implicit any" en algunos tsconfig estrictos
-  const itinerary: Itinerary = useItineraryStore((s) => s.itinerary)
+  const itinerary = useItinerary((s) => s.itinerary);
 
   return (
-    <div className="p-4">
-      <pre className="text-xs leading-5 whitespace-pre-wrap">
-        {JSON.stringify(itinerary, null, 2)}
-      </pre>
-    </div>
-  )
+    <pre
+      style={{
+        width: "100%",
+        height: "100%",
+        margin: 0,
+        padding: 12,
+        overflow: "auto",
+        background: "#0b1020",
+        color: "#cde3ff",
+        borderRadius: 8,
+        fontSize: 12,
+        lineHeight: 1.4,
+      }}
+    >
+{JSON.stringify(itinerary, null, 2)}
+    </pre>
+  );
 }

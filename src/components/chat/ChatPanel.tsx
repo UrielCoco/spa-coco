@@ -1,48 +1,55 @@
-import React, { useState } from 'react'
-import { mergeItineraryPartial } from '@/services/parsers'
+import React, { useState } from "react";
+import { useChat } from "@/store/chat.store";
 
 /**
- * ChatPanel minimal para compilar sin dependencias rotas.
- * - Envía el mensaje (no hace request real aquí).
- * - Demuestra cómo aplicar un "diff" parcial al itinerario.
+ * Panel de chat que mantiene la conversación (izquierda).
+ * NO toca el panel del medio (ItineraryJsonView).
+ * Si ya tienes lógica para llamar a la API, invócala en handleSend.
  */
 export default function ChatPanel() {
-  const [msg, setMsg] = useState('')
+  const messages = useChat((s) => s.messages);
+  const add = useChat((s) => s.add);
+  const [text, setText] = useState("");
 
-  const handleSend = () => {
-    if (!msg.trim()) return
+  const handleSend = async () => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
 
-    // 🎯 EJEMPLO: aplicar un "diff" al itinerario (quítalo si no lo necesitas)
-    // Aquí simulamos que el asistente devolvió un parcial:
-    mergeItineraryPartial({
-      summary: { lastNote: msg.trim() },
-    })
+    // 1) añadimos el mensaje del usuario
+    add({ role: "user", content: trimmed });
+    setText("");
 
-    setMsg('')
-  }
+    // 2) (opcional) aquí invocas tu backend/assistant
+    // const assistantReply = await callAssistant(trimmed);
+    // add({ role: "assistant", content: assistantReply });
+  };
 
   return (
-    <div className="h-full flex flex-col">
-      <div className="p-3 border-b font-medium">Chat</div>
-
-      <div className="flex-1 overflow-auto p-3 text-sm text-neutral-500">
-        (Aquí podrás listar los mensajes…)
+    <div className="flex h-full flex-col">
+      <div className="flex-1 overflow-auto px-3 py-2">
+        {messages.length === 0 && (
+          <div className="text-sm text-muted-foreground">(Aquí podrás listar los mensajes...)</div>
+        )}
+        {messages.map((m, i) => (
+          <div key={i} className="mb-2">
+            <div className="text-xs font-semibold uppercase text-slate-500">{m.role}</div>
+            <div className="whitespace-pre-wrap text-sm">{m.content}</div>
+          </div>
+        ))}
       </div>
 
-      <div className="p-3 border-t flex gap-2">
+      <div className="border-t p-2 flex gap-2">
         <input
-          className="flex-1 border rounded-xl px-3 h-10"
-          value={msg}
-          onChange={(e) => setMsg(e.target.value)}
+          className="flex-1 rounded border px-3 py-2 text-sm"
           placeholder="Escribe tu mensaje…"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => (e.key === "Enter" && !e.shiftKey ? handleSend() : undefined)}
         />
-        <button
-          className="h-10 px-4 rounded-xl border hover:bg-gray-50"
-          onClick={handleSend}
-        >
+        <button className="rounded bg-black px-3 py-2 text-white text-sm" onClick={handleSend}>
           Enviar
         </button>
       </div>
     </div>
-  )
+  );
 }
