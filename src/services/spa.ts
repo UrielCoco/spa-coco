@@ -1,99 +1,129 @@
-/* src/services/spa.ts */
-export type Role = "user" | "assistant" | "system";
-export type ChatMessage = { role: Role; content: string };
+// src/services/spa.ts
+// @ts-nocheck
 
-export type SpaEvent =
-  | { type: "assistant"; delta: string }
-  | { type: "assistant_done"; content: string }
-  | { type: "itinerary"; partial: any }
-  | { type: "error"; message: string }
-  | { type: "done" };
+export type Role = "user" | "assistant" | "system" | "tool";
 
-/** Alias por compatibilidad con código previo (ChatPanel esperaba AssistantEvent). */
-export type AssistantEvent = SpaEvent;
+export type ChatMessage = {
+  role: Role;
+  content: string;
+  // opcional: para tool calls / blobs
+  name?: string;
+  // si necesitas anexar objetos
+  payload?: unknown;
+};
 
 export type SendSpaChatRequest = {
   messages: ChatMessage[];
+  system?: string;
+  tools?: any;
+  metadata?: Record<string, any>;
 };
 
-/**
- * Envía el historial al backend y consume el SSE.
- * onEvent recibe cada evento del stream: assistant, assistant_done, itinerary, error, done.
- */
-export async function sendSpaChat(
+export type AssistantEvent =
+  | { type: "assistant_text_delta"; text: string }
+  | { type: "assistant_text_done"; text: string }
+  | { type: "assistant_message"; message: any } // mensaje ya armado
+  | { type: "tool_call_delta"; name: string; argsDelta: string }
+  | { type: "tool_call_done"; name: string; args: any }
+  | { type: "raw"; event: any }
+  | { type: "error"; error: any }
+  | { type: "done" };
+
+const isSSELine = (line: string) => line.startsWith("data: ");
+
+export async function* streamSpaChat(
   req: SendSpaChatRequest,
-  onEvent: (ev: SpaEvent) => void
-) {
+): AsyncGenerator<AssistantEvent, void, unknown> {
   const res = await fetch("/api/spa-chat", {
     method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
-    headers: { "content-type": "application/json" },
   });
 
   if (!res.ok || !res.body) {
-    const text = await res.text().catch(() => "");
-    onEvent({
-      type: "error",
-      message: `HTTP ${res.status} al contactar /api/spa-chat: ${text}`,
-    });
-    onEvent({ type: "done" });
+    yield { type: "error", error: { status: res.status, message: "HTTP error" } };
     return;
   }
 
   const reader = res.body.getReader();
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder("utf-8");
   let buffer = "";
 
-  const flush = (chunk: string) => {
-    buffer += chunk;
-    const parts = buffer.split("\n\n");
-    buffer = parts.pop() ?? "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
 
-    for (const pkt of parts) {
-      const lines = pkt.split("\n");
-      let event = "message";
-      let data = "";
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop() ?? "";
 
-      for (const line of lines) {
-        if (line.startsWith("event: ")) event = line.slice(7).trim();
-        else if (line.startsWith("data: ")) data += line.slice(6);
-      }
+      for (const raw of parts) {
+        const line = raw.trim();
+        if (!line) continue;
 
-      try {
-        const parsed = data ? JSON.parse(data) : {};
-        switch (event) {
-          case "assistant":
-            onEvent({ type: "assistant", delta: parsed.delta ?? "" });
-            break;
-          case "assistant_done":
-            onEvent({ type: "assistant_done", content: parsed.content ?? "" });
-            break;
-          case "itinerary":
-            onEvent({ type: "itinerary", partial: parsed.partial });
-            break;
-          case "error":
-            onEvent({ type: "error", message: parsed.message ?? "Error" });
-            break;
-          case "done":
-            onEvent({ type: "done" });
-            break;
-          default:
-            // ignoramos otros eventos
-            break;
+        // Soportamos "event: done" y "data: ..."
+        if (line.startsWith("event: done")) {
+          yield { type: "done" };
+          continue;
         }
-      } catch {
-        // paquete malformado, ignorar
+
+        const dataLine = line.split("\n").find(isSSELine);
+        if (!dataLine) continue;
+
+        const json = dataLine.slice("data: ".length);
+        let evt: any;
+        try {
+          evt = JSON.parse(json);
+        } catch {
+          continue;
+        }
+
+        // Emitimos evento bruto
+        yield { type: "raw", event: evt };
+
+        // Interpretación mínima de eventos de OpenAI Responses
+        // Texto delta
+        if (evt.type === "response.output_text.delta") {
+          yield { type: "assistant_text_delta", text: evt.delta || "" };
+        }
+        if (evt.type === "response.output_text.done") {
+          yield { type: "assistant_text_done", text: evt.output_text || "" };
+        }
+
+        // Mensajes (con partes)
+        if (evt.type === "message") {
+          yield { type: "assistant_message", message: evt.message };
+        }
+
+        // Function call / tool call
+        if (evt.type === "response.function_call.arguments.delta") {
+          yield {
+            type: "tool_call_delta",
+            name: evt.name || "tool",
+            argsDelta: evt.arguments_delta || "",
+          };
+        }
+        if (evt.type === "response.function_call.completed") {
+          let args: any = {};
+          try {
+            args = evt.arguments ? JSON.parse(evt.arguments) : {};
+          } catch {
+            args = { _raw: evt.arguments };
+          }
+          yield {
+            type: "tool_call_done",
+            name: evt.name || "tool",
+            args,
+          };
+        }
+
+        if (evt.ok === false && evt.error) {
+          yield { type: "error", error: evt.error };
+        }
       }
     }
-  };
-
-  // loop de streaming
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
-      if (buffer) flush("\n\n");
-      break;
-    }
-    flush(decoder.decode(value, { stream: true }));
+  } finally {
+    reader.releaseLock();
   }
 }
