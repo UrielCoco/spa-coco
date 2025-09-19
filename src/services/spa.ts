@@ -9,10 +9,17 @@ export type SpaEvent =
   | { type: "error"; message: string }
   | { type: "done" };
 
+/** Alias por compatibilidad con código previo (ChatPanel esperaba AssistantEvent). */
+export type AssistantEvent = SpaEvent;
+
 export type SendSpaChatRequest = {
   messages: ChatMessage[];
 };
 
+/**
+ * Envía el historial al backend y consume el SSE.
+ * onEvent recibe cada evento del stream: assistant, assistant_done, itinerary, error, done.
+ */
 export async function sendSpaChat(
   req: SendSpaChatRequest,
   onEvent: (ev: SpaEvent) => void
@@ -71,7 +78,7 @@ export async function sendSpaChat(
             onEvent({ type: "done" });
             break;
           default:
-            // ignoramos
+            // ignoramos otros eventos
             break;
         }
       } catch {
@@ -80,7 +87,7 @@ export async function sendSpaChat(
     }
   };
 
-  // stream loop
+  // loop de streaming
   while (true) {
     const { done, value } = await reader.read();
     if (done) {

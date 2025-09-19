@@ -3,11 +3,9 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import type { ChatMessage } from "@/services/spa";
 import { sendSpaChat } from "@/services/spa";
 
-// ⚠️ Para evitarte errores de tipos por diferencias en tu store,
-// hacemos import laxo y usamos llamadas opcionales.
+// Intentamos acoplar al store actual sin romper si cambia el nombre del método
 let applyPartialItinerary: (p: any) => void = () => {};
 try {
-  // intenta varias firmas comunes
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const store = require("@/store/itinerary.store");
   const s = store?.useItineraryStore?.getState?.() ?? store?.useItineraryStore?.();
@@ -16,11 +14,10 @@ try {
     s?.upsertFromPartial ??
     s?.merge ??
     ((p: any) => {
-      // último recurso: exponer algo en window para depurar
       (globalThis as any).__lastItineraryPartial = p;
     });
 } catch {
-  // sin store: ignoramos
+  // sin store (dev), ignoramos
 }
 
 export function useSpaChat() {
@@ -42,7 +39,6 @@ export function useSpaChat() {
     await sendSpaChat({ messages: [...messages, userMsg] }, (ev) => {
       if (ev.type === "assistant") {
         bufferRef.current += ev.delta;
-        // mostramos token a token como “assistant (stream)”
         setMessages((prev) => {
           const last = prev[prev.length - 1];
           if (last?.role === "assistant") {
@@ -53,7 +49,6 @@ export function useSpaChat() {
           return [...prev, { role: "assistant", content: bufferRef.current }];
         });
       } else if (ev.type === "assistant_done") {
-        // aseguramos que el último mensaje queda con el contenido completo
         setMessages((prev) => {
           const last = prev[prev.length - 1];
           if (last?.role === "assistant") {
