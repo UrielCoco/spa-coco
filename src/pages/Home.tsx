@@ -1,44 +1,18 @@
 "use client";
 
 import React from "react";
-import ChatPanel from "@/components/chat/ChatPanel";
-import ItineraryJsonView from "@/components/itinerary/ItineraryJsonView";
-import ExportBar from "@/components/itinerary/ExportBar";
 import ResizableSplit from "@/components/layout/ResizableSplit";
+import ChatPanel from "@/components/chat/ChatPanel";
+import ExportBar from "@/components/itinerary/ExportBar";
+import RightLogsPane from "@/components/layout/RightLogsPane";
 
 /**
- * Layout con 2 divisores:
- * - Split A: Izquierda (Chat)  |  Derecha (Split B)
- * - Split B: Centro (JSON)     |  Derecha (Eventos/Logs)
- *
- * En móvil ya usas tabs/stack: este layout afecta principalmente desktop.
+ * Layout general desktop:
+ *  - Izquierda: Chat
+ *  - Derecha: Split (Centro JSON / Derecha Logs)
+ * En móvil tu stack/tabs siguen aplicando (este layout afecta sobre todo desktop).
  */
 export default function Home() {
-  const RightPane = (
-    <ResizableSplit
-      // Split B: JSON (centro) | Eventos (derecha)
-      defaultRatio={0.6}
-      storageKey="ui:split:right"
-      left={
-        <div className="h-full border rounded overflow-hidden bg-background">
-          {/* Centro: SIEMPRE el JSON del itinerario */}
-          <ItineraryJsonView />
-        </div>
-      }
-      right={
-        <div className="h-full border rounded overflow-hidden bg-background">
-          {/* Derecha: “Respuestas del Assistant (completas)” o logs de streaming */}
-          <div className="h-full flex flex-col">
-            <div className="px-3 py-2 border-b font-medium">Respuestas del Assistant (completas)</div>
-            <div id="assistant-events" className="flex-1 overflow-auto p-3 text-sm text-muted-foreground">
-              <div>Sin eventos (aún)…</div>
-            </div>
-          </div>
-        </div>
-      }
-    />
-  );
-
   return (
     <div className="h-screen w-screen flex flex-col">
       {/* Header */}
@@ -50,16 +24,15 @@ export default function Home() {
       {/* Cuerpo con 2 divisores anidados */}
       <main className="flex-1 min-h-0">
         <ResizableSplit
-          // Split A: Chat (izq) | RightPane (der)
+          // Split A: Chat (izquierda) | RightPane (derecha)
           defaultRatio={0.33}
           storageKey="ui:split:left"
           left={
             <div className="h-full border rounded overflow-hidden bg-background">
-              {/* Izquierda: Chat con burbujas */}
               <ChatPanel />
             </div>
           }
-          right={RightPane}
+          right={<RightLogsPane />}
         />
       </main>
     </div>
