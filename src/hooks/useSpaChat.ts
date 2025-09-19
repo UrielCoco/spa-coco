@@ -16,58 +16,13 @@ function uid() {
   return Math.random().toString(36).slice(2);
 }
 
-/** Merge profundo, preservando arrays por reemplazo (no concat). */
-function deepMerge<T>(target: T, src: any): T {
-  if (src === null || src === undefined) return target;
-  if (Array.isArray(src)) {
-    // reemplazo de arrays
-    return src as unknown as T;
-  }
-  if (typeof src !== "object") {
-    return src as T;
-  }
-  if (typeof target !== "object" || target === null) {
-    return { ...(src as object) } as T;
-  }
-  const out: any = Array.isArray(target) ? [...target] : { ...(target as any) };
-  for (const k of Object.keys(src)) {
-    const v = (src as any)[k];
-    out[k] = deepMerge(out[k], v);
-  }
-  return out as T;
-}
-
-/** Aplica un parcial al store, sea cual sea la forma del store. */
-function applyPartialToStore(partial: Record<string, any>) {
-  const api: any = useItineraryStore as any;
-
-  // 1) Si tu store definió acciones específicas, úsalas
-  const st = api.getState?.();
-  const upsertPartial = st?.upsertPartial ?? st?.upsert ?? st?.mergeItinerary ?? st?.merge;
-
-  if (typeof upsertPartial === "function") {
-    try {
-      upsertPartial(partial);
-      return;
-    } catch {
-      // Si falla, caemos al plan B
-    }
-  }
-
-  // 2) Plan B: merge profundo directo sobre el estado (vía setState de Zustand)
-  const current = api.getState?.();
-  if (!current || typeof api.setState !== "function") return;
-
-  const next = deepMerge(current, partial);
-  api.setState(next, false, "assistant.upsertPartial");
-}
-
 export function useSpaChat() {
   const [bubbles, setBubbles] = useState<Bubble[]>([]);
   const [thinking, setThinking] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const messagesRef = useRef<{ role: "user" | "assistant"; content: string }[]>([]);
+  const applyPartialToStore = useItineraryStore((s) => s.applyPartial);
 
   const pushBubble = useCallback((b: Bubble) => {
     setBubbles((prev) => [...prev, b]);
@@ -79,6 +34,10 @@ export function useSpaChat() {
     setError(null);
     messagesRef.current = [];
   }, []);
+
+  // 👇 BASE=/api y componemos /spa-chat (match con tu proxy y prod)
+  const BASE = (import.meta.env.VITE_ASSISTANT_BASE_URL as string) || "/api";
+  const ENDPOINT = `${BASE.replace(/\/$/, "")}/spa-chat`;
 
   const send = useCallback(
     async (text: string): Promise<SendResult> => {
@@ -93,7 +52,7 @@ export function useSpaChat() {
       setError(null);
 
       try {
-        const res = await fetch("/api/spa-chat", {
+        const res = await fetch(ENDPOINT, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ messages: messagesRef.current }),
@@ -121,23 +80,17 @@ export function useSpaChat() {
 
         setThinking(false);
         return { ok: true, assistantText };
-      } catch (e: any) {
+      } catch (err: any) {
         setThinking(false);
-        setError(e?.message || "Fallo desconocido");
-        return { ok: false, error: e?.message || "Fallo desconocido" };
+        setError(err?.message || "Error desconocido");
+        return { ok: false, error: err?.message || "Error" };
       }
     },
     [pushBubble]
   );
 
   return useMemo(
-    () => ({
-      bubbles,
-      thinking,
-      error,
-      send,
-      reset,
-    }),
+    () => ({ bubbles, thinking, error, send, reset }),
     [bubbles, thinking, error, send, reset]
   );
 }

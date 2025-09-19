@@ -2,11 +2,7 @@
 import { safeFetch } from "@/lib/fetch";
 
 export type ChatRole = "user" | "assistant" | "system";
-
-export type ChatMessage = {
-  role: ChatRole;
-  content: string;
-};
+export type ChatMessage = { role: ChatRole; content: string };
 
 type StreamEvent =
   | "meta"
@@ -17,55 +13,29 @@ type StreamEvent =
   | "error"
   | "message";
 
-type StartStreamOpts = {
-  signal?: AbortSignal;
-  onEvent?: (event: StreamEvent, data: any) => void;
-  onError?: (err: any) => void;
-};
+type OnEvent = (event: StreamEvent, payload: any) => void;
+type OnError = (err: any) => void;
 
-/**
- * Inicia un stream SSE contra /api/spa-chat y ejecuta onEvent(event, data)
- * por cada chunk { event: "...", data: ... }.
- */
-export async function startStream(
+// 👇 BASE=/api -> armamos /spa-chat
+const BASE = (import.meta.env.VITE_ASSISTANT_BASE_URL as string) || "/api";
+const ENDPOINT = `${BASE.replace(/\/$/, "")}/spa-chat`;
+
+export async function streamAssistant(
   messages: ChatMessage[],
-  opts: StartStreamOpts = {}
+  onEvent?: OnEvent,
+  onError?: OnError
 ) {
-  const { signal, onEvent, onError } = opts;
-
   try {
-    // 🔒 Valida mensajes para evitar 400
-    if (!Array.isArray(messages) || messages.length === 0) {
-      throw new Error(
-        "startStream: expected an array of messages [{ role, content }]."
-      );
-    }
-
-    // 👈 USA el endpoint nuevo pensado para la SPA
-    const resp = await safeFetch("/api/spa-chat", {
+    const resp = await safeFetch(ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ messages }),
-      signal,
     });
 
-    if (!resp.ok) {
-      let payload: any = null;
-      try {
-        payload = await resp.json();
-      } catch {
-        // noop
-      }
-      const msg = payload?.error || `HTTP ${resp.status}`;
+    if (!resp.ok || !resp.body) {
+      const msg = `HTTP ${resp.status}: ${resp.statusText}`;
       onError?.(new Error(msg));
-      onEvent?.("error", { message: msg });
-      return;
-    }
-
-    if (!resp.body) {
-      const err = new Error("No response body");
-      onError?.(err);
-      onEvent?.("error", { message: err.message });
+      onEvent?.("error", msg);
       return;
     }
 
@@ -78,7 +48,7 @@ export async function startStream(
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
-      const chunks = buffer.split("\n\n"); // SSE separa eventos con línea en blanco
+      const chunks = buffer.split("\n\n");
       buffer = chunks.pop() ?? "";
 
       for (const chunk of chunks) {
@@ -89,39 +59,21 @@ export async function startStream(
         for (const raw of lines) {
           const line = raw.trim();
           if (!line) continue;
-          if (line.startsWith("event:")) {
-            event = line.slice(6).trim() as StreamEvent;
-          } else if (line.startsWith("data:")) {
-            // Puede haber múltiples líneas "data:"
-            dataStr += line.slice(5).trim();
-          }
+          if (line.startsWith("event:")) event = line.slice(6).trim() as StreamEvent;
+          else if (line.startsWith("data:")) dataStr += line.slice(5).trim();
         }
 
-        // Fallback: algunos servers no incluyen "event:"
-        if (!lines.some((l) => l.startsWith("event:"))) {
-          event = "delta";
-          dataStr = chunk.trim().replace(/^data:\s*/g, "");
-        }
-
-        let payload: any = dataStr;
-        try {
-          payload = JSON.parse(dataStr);
-        } catch {
-          // si no es JSON, dejamos el string tal cual
-        }
+        let payload: any = null;
+        try { payload = dataStr ? JSON.parse(dataStr) : null; }
+        catch { payload = { value: dataStr }; }
 
         onEvent?.(event, payload);
       }
     }
 
-    // Cierre "limpio"
     onEvent?.("done", {});
-
   } catch (err) {
     onError?.(err);
-    onEvent?.(
-      "error",
-      err instanceof Error ? err.message : String(err ?? "unknown")
-    );
+    onEvent?.("error", err instanceof Error ? err.message : String(err ?? "unknown"));
   }
 }
