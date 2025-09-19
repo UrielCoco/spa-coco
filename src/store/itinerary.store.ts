@@ -1,176 +1,83 @@
-import { create } from "zustand"
-import { persist, createJSONStorage } from "zustand/middleware"
-import type { Itinerary, DayPlan, Activity, TransportLeg, ExtraService, LabelMap } from "@/types/itinerary"
+import { create } from 'zustand'
 
-type State = {
-  itinerary: Itinerary
-  lastUpdated?: string
-  setItinerary: (it: Itinerary) => void
-  mergeItinerary: (partial: Partial<Itinerary>) => void
-  reset: () => void
-  loadFromJSON: (json: Itinerary) => void
+/** Tipos muy flexibles para no pelear con el JSON del asistente */
+export type AnyRec = Record<string, any>
+
+export type Itinerary = {
+  meta?: AnyRec
+  summary?: AnyRec
+  flights?: AnyRec[]
+  days?: AnyRec[]
+  transports?: AnyRec[]
+  extras?: AnyRec[]
+  lights?: AnyRec
 }
 
-const initialItinerary = (): Itinerary => ({
-  labels: undefined,
-  meta: {
-    tripTitle: "New Trip",
-    travelers: undefined,
-    currency: undefined,
-    startDate: undefined,
-    endDate: undefined,
-    notes: undefined,
-  },
-  summary: { overview: "" },
-  flights: {
-    originCountry: "",
-    originCity: "",
-    returnCountry: "",
-    returnCity: "",
-  },
+const EMPTY: Itinerary = {
+  meta: { tripTitle: 'New Trip' },
+  summary: {},
+  flights: [],
   days: [],
   transports: [],
   extras: [],
-})
-
-/** --- Helpers de merge “inteligente” --- */
-function mergeLabels(a?: LabelMap, b?: LabelMap): LabelMap | undefined {
-  if (!a && !b) return undefined
-  return { ...(a || {}), ...(b || {}) }
+  lights: {},
 }
 
-function uniqBy<T>(arr: T[], key: (x: T) => string): T[] {
-  const m = new Map<string, T>()
-  for (const x of arr) m.set(key(x), x)
-  return Array.from(m.values())
-}
-
-function mergeActivities(base: Activity[] = [], incoming: Activity[] = []): Activity[] {
-  // Clave por título + hora (lo más estable que tenemos sin IDs)
-  const key = (a: Activity) => `${(a.time || "").trim()}|${(a.title || "").trim().toLowerCase()}`
-  const map = new Map<string, Activity>(base.map(a => [key(a), { ...a }]))
-
-  for (const act of incoming) {
-    const k = key(act)
-    if (map.has(k)) {
-      const prev = map.get(k)!
-      map.set(k, {
-        ...prev,
-        ...act,
-        location: { ...(prev.location || {}), ...(act.location || {}) },
-      })
+function deepMerge<T extends AnyRec>(base: T, patch: AnyRec): T {
+  const out: AnyRec = Array.isArray(base) ? [...(base as any)] : { ...base }
+  for (const [k, v] of Object.entries(patch ?? {})) {
+    if (v && typeof v === 'object' && !Array.isArray(v) && typeof out[k] === 'object' && !Array.isArray(out[k])) {
+      out[k] = deepMerge(out[k], v)
     } else {
-      map.set(k, { ...act })
+      out[k] = v
     }
   }
-  // Orden por hora ascendente (si falta hora, al final)
-  const toMinutes = (t?: string) => {
-    if (!t || !/^\d{1,2}:\d{2}$/.test(t)) return 1e9
-    const [h, m] = t.split(":").map(Number)
-    return h * 60 + m
-  }
-  return Array.from(map.values()).sort((x, y) => toMinutes(x.time) - toMinutes(y.time))
+  return out as T
 }
 
-function mergeDays(base: DayPlan[] = [], incoming: DayPlan[] = []): DayPlan[] {
-  const byIndex = new Map<number, DayPlan>(base.map(d => [d.dayIndex, { ...d, activities: [...(d.activities || [])] }]))
+type State = {
+  itinerary: Itinerary
+  /** bandera opcional para tu UI */
+  streaming: boolean
 
-  for (const p of incoming) {
-    const curr = byIndex.get(p.dayIndex)
-    if (curr) {
-      byIndex.set(p.dayIndex, {
-        ...curr,
-        ...p,
-        activities: mergeActivities(curr.activities || [], p.activities || []),
-      })
+  /** Reemplaza todo el itinerario desde un objeto o string JSON */
+  loadFromJSON: (src: string | Itinerary) => void
+
+  /** Mezcla (deep-merge) un parcial dentro del itinerario actual */
+  mergeItinerary: (partial: Partial<Itinerary>) => void
+
+  /** Limpia al estado base */
+  reset: () => void
+
+  /** (opcional) marca streaming */
+  setStreaming: (v: boolean) => void
+}
+
+export const useItineraryStore = create<State>((set, get) => ({
+  itinerary: EMPTY,
+  streaming: false,
+
+  loadFromJSON: (src) => {
+    let obj: Itinerary
+    if (typeof src === 'string') {
+      try {
+        obj = JSON.parse(src)
+      } catch (e) {
+        console.error('JSON inválido en loadFromJSON', e)
+        return
+      }
     } else {
-      byIndex.set(p.dayIndex, {
-        ...p,
-        activities: mergeActivities([], p.activities || []),
-      })
+      obj = src
     }
-  }
-  return Array.from(byIndex.values()).sort((a, b) => a.dayIndex - b.dayIndex)
-}
+    set({ itinerary: deepMerge(EMPTY, obj || {}) })
+  },
 
-function mergeTransports(base: TransportLeg[] = [], incoming: TransportLeg[] = []): TransportLeg[] {
-  const key = (t: TransportLeg) =>
-    `${t.mode}|${t.from?.name || ""}|${t.to?.name || ""}|${(t.from?.coords || []).join(",")}|${(t.to?.coords || []).join(",")}`
-  return uniqBy<TransportLeg>([...(base || []), ...(incoming || [])], key)
-}
+  mergeItinerary: (partial) => {
+    const current = get().itinerary
+    set({ itinerary: deepMerge(current, partial || {}) })
+  },
 
-function mergeExtras(base: ExtraService[] = [], incoming: ExtraService[] = []): ExtraService[] {
-  const key = (e: ExtraService) => `${e.type}|${(e.title || "").toLowerCase()}|${e.schedule?.date || ""}|${e.schedule?.time || ""}`
-  // incoming gana sobre base
-  const map = new Map<string, ExtraService>()
-  for (const e of base) map.set(key(e), e)
-  for (const e of incoming) map.set(key(e), { ...(map.get(key(e)) || {}), ...e })
-  return Array.from(map.values())
-}
+  reset: () => set({ itinerary: EMPTY }),
 
-function deepMergeItinerary(base: Itinerary, partial: Partial<Itinerary>): Itinerary {
-  const out: Itinerary = { ...base }
-
-  if (partial.labels) out.labels = mergeLabels(base.labels, partial.labels)
-
-  if (partial.meta) out.meta = { ...base.meta, ...partial.meta }
-
-  if (partial.summary) {
-    out.summary = {
-      ...base.summary,
-      ...partial.summary,
-      highlights: partial.summary.highlights
-        ? uniqBy([...(base.summary.highlights || []), ...partial.summary.highlights], x => x)
-        : base.summary.highlights,
-    }
-  }
-
-  if (partial.flights) {
-    out.flights = {
-      ...base.flights,
-      ...partial.flights,
-      outbound: { ...(base.flights.outbound || {}), ...(partial.flights.outbound || {}) },
-      inbound: { ...(base.flights.inbound || {}), ...(partial.flights.inbound || {}) },
-    }
-  }
-
-  if (partial.days) out.days = mergeDays(base.days, partial.days)
-
-  if (partial.transports) out.transports = mergeTransports(base.transports || [], partial.transports)
-
-  if (partial.extras) out.extras = mergeExtras(base.extras || [], partial.extras)
-
-  return out
-}
-
-/** --- Store --- */
-export const useItinerary = create<State>()(
-  persist(
-    (set, get) => ({
-      itinerary: initialItinerary(),
-      lastUpdated: undefined,
-
-      setItinerary: (it) =>
-        set({ itinerary: it, lastUpdated: new Date().toISOString() }),
-
-      mergeItinerary: (partial) =>
-        set(() => {
-          const current = get().itinerary
-          const merged = deepMergeItinerary(current, partial)
-          return { itinerary: merged, lastUpdated: new Date().toISOString() }
-        }),
-
-      reset: () => set({ itinerary: initialItinerary(), lastUpdated: new Date().toISOString() }),
-
-      loadFromJSON: (json) => set({ itinerary: json, lastUpdated: new Date().toISOString() }),
-    }),
-    {
-      name: "itinerary.v1",
-      storage: createJSONStorage(() => localStorage),
-      version: 1,
-      // migraciones si cambian campos en el futuro
-      migrate: (state: any, _version) => state,
-      partialize: (s) => ({ itinerary: s.itinerary, lastUpdated: s.lastUpdated }),
-    }
-  )
-)
+  setStreaming: (v) => set({ streaming: v }),
+}))

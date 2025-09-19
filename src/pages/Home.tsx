@@ -1,16 +1,17 @@
-// src/pages/Home.tsx
 import React, { useState } from 'react'
 import ExportBar from '@/components/itinerary/ExportBar'
 import ItineraryPanel from '@/components/itinerary/ItineraryPanel'
 import ItineraryJsonView from '@/components/itinerary/ItineraryJsonView'
 import AssistantResponsesView from '@/debug/AssistantResponsesView'
-import { useToolDebug } from '@/store/toolDebug.store'
+import { useItineraryStore } from '@/store/itinerary.store'
+// Si usas otro store para tool streaming, puedes mantenerlo; aquí muestro cómo con itinerary.store
+// o cambia por tu useToolDebug si ya lo tienes.
 
 import ChatPanel from '@/components/chat/ChatPanel'
 
 export default function Home() {
   const [showJson, setShowJson] = useState(false)
-  const streaming = useToolDebug((s) => s.streaming)
+  const streaming = useItineraryStore((s) => s.streaming)
 
   return (
     <div className="h-screen w-full flex flex-col">
