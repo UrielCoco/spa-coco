@@ -5,8 +5,6 @@ import ItineraryPanel from '@/components/itinerary/ItineraryPanel'
 import ItineraryJsonView from '@/components/itinerary/ItineraryJsonView'
 import AssistantResponsesView from '@/debug/AssistantResponsesView'
 
-
-
 // AJUSTA este import si tu chat se llama diferente
 import ChatPanel from '@/components/chat/ChatPanel'
 
