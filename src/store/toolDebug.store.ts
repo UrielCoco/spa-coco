@@ -1,17 +1,34 @@
-import { create } from "zustand";
+// src/store/toolDebug.store.ts
+import { create } from 'zustand'
 
-type State = {
-  lastToolRaw: string | null;
-  lastToolParsed: any | null;
-  setLastToolRaw: (s: string) => void;
-  setLastToolParsed: (v: any) => void;
-  clear: () => void;
-};
+type ToolDebugState = {
+  streaming: boolean
+  lastFunctionName?: string
+  lastToolRaw: string
+  lastToolParsed: any
+  start: (fnName: string) => void
+  appendRaw: (chunk: string) => void
+  setParsed: (obj: any) => void
+  end: () => void
+  clear: () => void
+}
 
-export const useToolDebug = create<State>((set) => ({
-  lastToolRaw: null,
-  lastToolParsed: null,
-  setLastToolRaw: (s) => set({ lastToolRaw: s }),
-  setLastToolParsed: (v) => set({ lastToolParsed: v }),
-  clear: () => set({ lastToolRaw: null, lastToolParsed: null }),
-}));
+export const useToolDebug = create<ToolDebugState>((set) => ({
+  streaming: false,
+  lastFunctionName: undefined,
+  lastToolRaw: '',
+  lastToolParsed: undefined,
+
+  start: (fnName) => set(() => ({ streaming: true, lastFunctionName: fnName })),
+  appendRaw: (chunk) =>
+    set((s) => ({ lastToolRaw: (s.lastToolRaw || '') + (chunk ?? '') })),
+  setParsed: (obj) => set(() => ({ lastToolParsed: obj })),
+  end: () => set(() => ({ streaming: false })),
+  clear: () =>
+    set(() => ({
+      streaming: false,
+      lastFunctionName: undefined,
+      lastToolRaw: '',
+      lastToolParsed: undefined,
+    })),
+}))

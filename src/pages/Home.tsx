@@ -4,12 +4,13 @@ import ExportBar from '@/components/itinerary/ExportBar'
 import ItineraryPanel from '@/components/itinerary/ItineraryPanel'
 import ItineraryJsonView from '@/components/itinerary/ItineraryJsonView'
 import AssistantResponsesView from '@/debug/AssistantResponsesView'
+import { useToolDebug } from '@/store/toolDebug.store'
 
-// AJUSTA este import si tu chat se llama diferente
 import ChatPanel from '@/components/chat/ChatPanel'
 
 export default function Home() {
   const [showJson, setShowJson] = useState(false)
+  const streaming = useToolDebug((s) => s.streaming)
 
   return (
     <div className="h-screen w-full flex flex-col">
@@ -18,10 +19,20 @@ export default function Home() {
         <div className="font-medium">New Trip</div>
 
         <div className="ml-auto flex items-center gap-2">
+          {streaming ? (
+            <span className="text-xs px-2 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+              JSON stream activo
+            </span>
+          ) : (
+            <span className="text-xs px-2 py-1 rounded-full bg-neutral-50 text-neutral-700 border">
+              JSON stream inactivo
+            </span>
+          )}
+
           <ExportBar />
           <button
             className="border rounded-2xl h-10 px-3 hover:bg-gray-50 transition"
-            onClick={() => setShowJson(v => !v)}
+            onClick={() => setShowJson((v) => !v)}
             title={showJson ? 'Mostrar interfaz gráfica' : 'Mostrar JSON'}
           >
             {showJson ? 'UI' : 'JSON'}
