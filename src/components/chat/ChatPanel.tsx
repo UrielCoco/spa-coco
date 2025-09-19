@@ -1,53 +1,112 @@
-import React, { useState } from "react";
-import { useChat } from "@/store/chat.store";
+import React, { useMemo, useRef, useState } from "react";
 
-/**
- * Panel de chat que mantiene la conversación (izquierda).
- * NO toca el panel del medio (ItineraryJsonView).
- * Si ya tienes lógica para llamar a la API, invócala en handleSend.
- */
+type Msg = { role: "user" | "assistant"; content: string };
+
 export default function ChatPanel() {
-  const messages = useChat((s) => s.messages);
-  const add = useChat((s) => s.add);
-  const [text, setText] = useState("");
+  const [messages, setMessages] = useState<Msg[]>([]);
+  const [pending, setPending] = useState(false);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
-  const handleSend = async () => {
-    const trimmed = text.trim();
-    if (!trimmed) return;
+  const canSend = useMemo(
+    () => !pending && (inputRef.current?.value?.trim()?.length ?? 0) > 0,
+    [pending]
+  );
 
-    // 1) añadimos el mensaje del usuario
-    add({ role: "user", content: trimmed });
-    setText("");
+  async function send() {
+    const text = inputRef.current?.value?.trim();
+    if (!text) return;
 
-    // 2) (opcional) aquí invocas tu backend/assistant
-    // const assistantReply = await callAssistant(trimmed);
-    // add({ role: "assistant", content: assistantReply });
-  };
+    // pinta el mensaje del usuario en la UI
+    setMessages((m) => [...m, { role: "user", content: text }]);
+    setPending(true);
+
+    try {
+      const res = await fetch("/api/spa-chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [{ role: "user", content: text }],
+        }),
+      });
+
+      if (!res.ok) {
+        const t = await res.text();
+        console.error("spa-chat error", res.status, t);
+        setMessages((m) => [
+          ...m,
+          {
+            role: "assistant",
+            content:
+              "Lo siento, hubo un problema al procesar el mensaje. Revisa los logs del server.",
+          },
+        ]);
+        return;
+      }
+
+      const data = (await res.json()) as {
+        assistantText?: string;
+      };
+
+      // pinta la respuesta del assistant si vino texto
+      if (data.assistantText && data.assistantText.trim().length > 0) {
+        setMessages((m) => [
+          ...m,
+          { role: "assistant", content: data.assistantText! },
+        ]);
+      }
+    } catch (err) {
+      console.error("spa-chat exception", err);
+      setMessages((m) => [
+        ...m,
+        {
+          role: "assistant",
+          content:
+            "No pude contactar al backend. ¿Estás en Vercel/localhost con /api/spa-chat activo?",
+        },
+      ]);
+    } finally {
+      setPending(false);
+      if (inputRef.current) inputRef.current.value = "";
+    }
+  }
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex-1 overflow-auto px-3 py-2">
-        {messages.length === 0 && (
-          <div className="text-sm text-muted-foreground">(Aquí podrás listar los mensajes...)</div>
-        )}
+      <div className="text-xs text-gray-400 px-3 py-2">USER / ASSISTANT</div>
+      <div className="flex-1 overflow-auto px-3 pb-3 space-y-3">
         {messages.map((m, i) => (
-          <div key={i} className="mb-2">
-            <div className="text-xs font-semibold uppercase text-slate-500">{m.role}</div>
-            <div className="whitespace-pre-wrap text-sm">{m.content}</div>
+          <div
+            key={i}
+            className={
+              m.role === "user"
+                ? "bg-white border rounded p-2 text-sm"
+                : "bg-slate-50 border rounded p-2 text-sm"
+            }
+          >
+            <div className="text-[10px] uppercase opacity-60 mb-1">
+              {m.role}
+            </div>
+            <div className="whitespace-pre-wrap">{m.content}</div>
           </div>
         ))}
       </div>
 
       <div className="border-t p-2 flex gap-2">
-        <input
-          className="flex-1 rounded border px-3 py-2 text-sm"
+        <textarea
+          ref={inputRef}
           placeholder="Escribe tu mensaje…"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => (e.key === "Enter" && !e.shiftKey ? handleSend() : undefined)}
+          className="flex-1 border rounded p-2 text-sm h-16 resize-none"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && e.metaKey) send();
+          }}
         />
-        <button className="rounded bg-black px-3 py-2 text-white text-sm" onClick={handleSend}>
-          Enviar
+        <button
+          className="px-3 py-2 border rounded text-sm"
+          onClick={send}
+          disabled={!canSend}
+          title="⌘ + Enter"
+        >
+          {pending ? "Enviando…" : "Enviar"}
         </button>
       </div>
     </div>
