@@ -1,100 +1,63 @@
-import { create } from "zustand";
-import { persist } from "zustand/middleware";
+// src/store/itinerary.store.ts
+import { create } from 'zustand';
+import { Itinerary } from '@/types/itinerary';
+import { DeepPartial, deepMerge } from '@/services/parsers';
 
-export type AnyRec = Record<string, any>;
-
-export interface Itinerary {
-  meta?: { tripTitle?: string; [k: string]: any };
-  summary?: AnyRec;
-  flights?: AnyRec[];
-  days?: AnyRec[];
-  transports?: AnyRec[];
-  extras?: AnyRec[];
-  lights?: AnyRec;
-}
-
-export interface ItineraryStore {
+export type ItineraryStore = {
   itinerary: Itinerary;
-  /** Reemplaza todo el itinerario */
-  replace: (it: Itinerary) => void;
-  /** Merge superficial del itinerario */
-  merge: (partial: Partial<Itinerary>) => void;
-  /** Carga JSON (string u objeto). Por defecto reemplaza; con mode="merge" hace merge. */
-  loadFromJSON: (json: string | object, mode?: "replace" | "merge") => void;
-  /** Vuelve al estado inicial */
-  reset: () => void;
-}
 
-const INITIAL: Itinerary = {
-  meta: { tripTitle: "New Trip" },
+  /** Reemplaza todo el estado con un JSON (objeto o string) */
+  loadFromJSON: (json: string | Partial<Itinerary>) => void;
+
+  /** Aplica un diff parcial (deep merge) */
+  applyPartial: (partial: DeepPartial<Itinerary>) => void;
+
+  /** Devuelve un JSON listo para exportar */
+  toJSON: () => Itinerary;
+
+  /** Limpia a valores por defecto */
+  reset: () => void;
+};
+
+const defaultItinerary: Itinerary = {
+  meta: { tripTitle: 'New Trip' },
   summary: {},
   flights: [],
   days: [],
   transports: [],
-  extras: [],
+  extras: {},
   lights: {},
 };
 
-function normalize(it: Partial<Itinerary>): Itinerary {
-  return {
-    meta: it.meta ?? { tripTitle: "New Trip" },
-    summary: it.summary ?? {},
-    flights: Array.isArray(it.flights) ? it.flights : [],
-    days: Array.isArray(it.days) ? it.days : [],
-    transports: Array.isArray(it.transports) ? it.transports : [],
-    extras: Array.isArray(it.extras) ? it.extras : [],
-    lights: it.lights ?? {},
-  };
+export const useItineraryStore = create<ItineraryStore>((set, get) => ({
+  itinerary: defaultItinerary,
+
+  loadFromJSON: (json) => {
+    try {
+      const obj: Partial<Itinerary> = typeof json === 'string' ? JSON.parse(json) : json;
+      const next = deepMerge(defaultItinerary, obj as any);
+      set({ itinerary: next });
+    } catch (e) {
+      console.error('loadFromJSON error:', e);
+      // si falla, no toca el estado
+    }
+  },
+
+  applyPartial: (partial) => {
+    const next = deepMerge(get().itinerary, partial);
+    set({ itinerary: next });
+  },
+
+  toJSON: () => get().itinerary,
+
+  reset: () => set({ itinerary: defaultItinerary }),
+}));
+
+/**
+ * Alias con selector tipado. Uso:
+ *   const flights = useItinerary(s => s.itinerary.flights)
+ *   const apply = useItinerary(s => s.applyPartial)
+ */
+export function useItinerary<T>(selector: (s: ItineraryStore) => T): T {
+  return useItineraryStore(selector);
 }
-
-export const useItinerary = create<ItineraryStore>()(
-  persist(
-    (set, get) => ({
-      itinerary: INITIAL,
-
-      replace: (it) => set({ itinerary: normalize(it) }),
-
-      merge: (partial) =>
-        set({ itinerary: normalize({ ...get().itinerary, ...partial }) }),
-
-      loadFromJSON: (json, mode = "replace") => {
-        let obj: any = json;
-        if (typeof json === "string") {
-          try {
-            obj = JSON.parse(json);
-          } catch {
-            console.warn("JSON inválido pasado a loadFromJSON");
-            return;
-          }
-        }
-        if (mode === "merge") {
-          const merged = { ...get().itinerary, ...obj };
-          set({ itinerary: normalize(merged) });
-        } else {
-          set({ itinerary: normalize(obj) });
-        }
-      },
-
-      reset: () => set({ itinerary: INITIAL }),
-    }),
-    { name: "itinerary-store" }
-  )
-);
-
-/** Utilidad opcional para descargar el JSON actual */
-export function downloadJSON(filename = "itinerary.json") {
-  const data = useItinerary.getState().itinerary;
-  const blob = new Blob([JSON.stringify(data, null, 2)], {
-    type: "application/json",
-  });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
-
-export type { Itinerary as ItineraryType };

@@ -1,107 +1,85 @@
-// /hooks/useSpaChat.ts
-import { useCallback, useState, useRef } from 'react';
-import { deepMerge, Itinerary } from '../lib/itinerary';
+// src/hooks/useSpaChat.ts
+import { useCallback, useMemo, useRef, useState } from 'react';
+import { sendSpaChat, type ChatMessage, type SendSpaChatRequest } from '@/services/spa';
 
-type Message = { role: 'user' | 'assistant'; content: string };
+export type ChatEvent = {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  at: number;
+};
 
-export function useSpaChat() {
-  const [itinerary, setItinerary] = useState<Itinerary>({});
-  const [loading, setLoading] = useState(false);
+type UseSpaChatResult = {
+  events: ChatEvent[];
+  sending: boolean;
+  error: string | null;
+  send: (text: string) => Promise<string | null>;
+  clear: () => void;
+};
 
-  // Buffer por tool_call.id para reconstruir JSON de argumentos por deltas
-  const partialBuffers = useRef<Map<string, string>>(new Map());
+/**
+ * Hook para manejar la conversación con /api/spa-chat.
+ */
+export function useSpaChat(initialEvents: ChatEvent[] = []): UseSpaChatResult {
+  const [events, setEvents] = useState<ChatEvent[]>(initialEvents);
+  const [sending, setSending] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  const lastMessages = useRef<ChatMessage[]>([]);
 
-  const send = useCallback(async (messages: Message[]) => {
-    setLoading(true);
-    partialBuffers.current.clear();
-
-    const res = await fetch('/api/spa-chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages }),
-    });
-
-    if (!res.body) {
-      setLoading(false);
-      throw new Error('La respuesta no trae stream (body vacío)');
-    }
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let carry = '';
-    let current = { event: '', data: '' };
-
-    const handleSse = (evt: string, data: string) => {
-      try {
-        const payload = data ? JSON.parse(data) : {};
-        // 1) Deltas de argumentos (pintado opcional "en vivo")
-        if (evt === 'tool_call.arguments.delta') {
-          const id: string | undefined = payload?.data?.id;
-          const delta: string = payload?.data?.arguments?.delta ?? '';
-          if (id && delta) {
-            const prev = partialBuffers.current.get(id) ?? '';
-            const next = prev + delta;
-            partialBuffers.current.set(id, next);
-
-            // Si por casualidad ya es JSON válido, mergeamos para visualización en vivo
-            const trimmed = next.trim();
-            if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
-              try {
-                const patch = JSON.parse(trimmed) as Itinerary;
-                setItinerary((curr) => deepMerge(curr, patch));
-              } catch {
-                // Aún no es JSON válido completo: ignoramos
-              }
-            }
-          }
-          return;
-        }
-
-        // 2) Tool finalizado → este es el que manda el JSON definitivo
-        if (evt === 'tool_call.completed') {
-          const toolName = payload?.data?.tool_name;
-          if (toolName === 'upsert_itinerary') {
-            // El backend coloca el JSON completo en data.arguments (string)
-            const args = payload?.data?.arguments ?? '{}';
-            const patch = typeof args === 'string' ? JSON.parse(args) : args;
-            setItinerary((curr) => deepMerge(curr, patch));
-          }
-          return;
-        }
-
-        // 3) Run finalizado
-        if (evt === 'done') {
-          setLoading(false);
-        }
-      } catch {
-        // silencioso para no romper el stream por un JSON parcial
-      }
-    };
-
-    const flushLine = (line: string) => {
-      if (!line) return; // línea vacía (separador)
-      if (line.startsWith('event:')) {
-        current.event = line.slice(6).trim();
-      } else if (line.startsWith('data:')) {
-        current.data = line.slice(5).trim();
-        handleSse(current.event, current.data);
-        current = { event: '', data: '' };
-      }
-    };
-
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      carry += decoder.decode(value, { stream: true });
-
-      // SSE suele venir como bloques separados por \n\n. Procesamos línea a línea.
-      const lines = carry.split(/\r?\n/);
-      carry = lines.pop() ?? '';
-      for (const line of lines) flushLine(line);
-    }
-
-    setLoading(false);
+  const pushEvent = useCallback((role: ChatEvent['role'], content: string) => {
+    setEvents((prev) => [
+      ...prev,
+      { id: `${Date.now()}-${Math.random()}`, role, content, at: Date.now() },
+    ]);
   }, []);
 
-  return { send, itinerary, loading };
+  // Forzamos el tipo explícito a ChatMessage[]
+  const messagesForRequest: ChatMessage[] = useMemo(() => {
+    return events.map<ChatMessage>((e) => ({ role: e.role, content: e.content }));
+  }, [events]);
+
+  const send = useCallback(
+    async (text: string): Promise<string | null> => {
+      const clean = text.trim();
+      if (!clean || sending) return null;
+
+      setError(null);
+      pushEvent('user', clean);
+      setSending(true);
+
+      try {
+        // Definimos explícitamente el mensaje de usuario como ChatMessage
+        const userMsg: ChatMessage = { role: 'user', content: clean };
+
+        // Definimos explícitamente el body como SendSpaChatRequest
+        const body: SendSpaChatRequest = {
+          messages: [...messagesForRequest, userMsg],
+        };
+
+        lastMessages.current = body.messages;
+
+        const answer = await sendSpaChat(body);
+        pushEvent('assistant', answer);
+        return answer;
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setError(msg);
+        pushEvent('assistant', `No pude contactar al backend (/api/spa-chat). ${msg}`);
+        return null;
+      } finally {
+        setSending(false);
+      }
+    },
+    [messagesForRequest, pushEvent, sending],
+  );
+
+  const clear = useCallback(() => {
+    setEvents([]);
+    setError(null);
+    lastMessages.current = [];
+  }, []);
+
+  return { events, sending, error, send, clear };
 }
+
+export default useSpaChat;

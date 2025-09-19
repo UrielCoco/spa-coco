@@ -1,23 +1,25 @@
-import React from "react";
-import { useItinerary } from "@/store/itinerary.store";
+import React from 'react';
+import { useItinerary } from '@/store/itinerary.store';
 
 export default function ExtrasCard() {
-  const extras = useItinerary((s) => s.itinerary.extras ?? []);
+  const extras = useItinerary((s) => s.itinerary.extras);
 
+  const keys = Object.keys(extras ?? {});
   return (
-    <section className="p-3">
-      <h3 className="mb-2 text-sm font-semibold">Extras</h3>
-      {Array.isArray(extras) && extras.length > 0 ? (
-        <ul className="space-y-2">
-          {extras.map((e: any, i: number) => (
-            <li key={i} className="rounded border p-2 text-sm">
-              {e?.label || e?.name || e?.title || "Extra"}
+    <div className="rounded-md border border-zinc-600/40 p-3">
+      <div className="mb-2 font-semibold">Extras</div>
+      {keys.length === 0 ? (
+        <p className="text-sm opacity-70">Sin extras por ahora.</p>
+      ) : (
+        <ul className="list-inside list-disc text-sm">
+          {keys.map((k) => (
+            <li key={k}>
+              <span className="opacity-70">{k}: </span>
+              <span>{String((extras as any)[k])}</span>
             </li>
           ))}
         </ul>
-      ) : (
-        <div className="text-sm text-muted-foreground">Sin extras por ahora.</div>
       )}
-    </section>
+    </div>
   );
 }

@@ -1,72 +1,60 @@
-export type LabelMap = Record<string, string>
+// src/types/itinerary.ts
+export type Flight = {
+  from?: string;
+  to?: string;
+  date?: string; // ISO
+  airline?: string;
+  number?: string;
+  notes?: string;
+};
 
-export interface Itinerary {
-  labels?: LabelMap
+export type Transport = {
+  kind?: 'car' | 'van' | 'train' | 'plane' | 'boat' | 'transfer';
+  date?: string; // ISO
+  from?: string;
+  to?: string;
+  provider?: string;
+  notes?: string;
+};
+
+export type DayActivity = {
+  time?: string;          // "08:00"
+  title?: string;         // "Hamam tradicional"
+  details?: string;       // texto libre
+  private?: boolean;
+  durationMin?: number;
+  location?: string;
+  avoidCrowds?: boolean;
+};
+
+export type DayPlan = {
+  date?: string;          // ISO
+  city?: string;
+  hotel?: string;
+  notes?: string;
+  activities?: DayActivity[];
+};
+
+export type Extras = Record<string, unknown>;
+export type Lights = Record<string, unknown>;
+
+export type Summary = {
+  overview?: string;
+  askNote?: string;
+  originCity?: string;
+  returnCity?: string;
+  originCountry?: string;
+  returnCountry?: string;
+};
+
+export type Itinerary = {
   meta: {
-    tripTitle: string
-    travelers?: number
-    currency?: string
-    startDate?: string
-    endDate?: string
-    notes?: string
-  }
-  summary: {
-    overview: string
-    highlights?: string[]
-    budgetEstimate?: number
-  }
-  flights: {
-    originCountry: string
-    originCity: string
-    returnCountry: string
-    returnCity: string
-    outbound?: FlightInfo
-    inbound?: FlightInfo
-  }
-  days: DayPlan[]
-  transports?: TransportLeg[]
-  extras?: ExtraService[]
-}
-
-export interface FlightInfo {
-  airline?: string; code?: string; depTime?: string; arrTime?: string; from?: string; to?: string
-}
-
-export interface DayPlan {
-  date?: string
-  dayIndex: number
-  city?: string
-  country?: string
-  activities: Activity[]
-}
-
-export type ActivityTag = 'tour' | 'attraction' | 'restaurant' | 'experience' | 'transfer' | 'free'
-
-export interface Activity {
-  time?: string
-  title: string
-  description?: string
-  durationMins?: number
-  tag?: ActivityTag
-  location?: {
-    name?: string; address?: string; coords?: [number, number]
-  }
-  cost?: number
-}
-
-export interface TransportLeg {
-  mode: 'car' | 'van' | 'yacht' | 'helicopter' | 'plane' | 'train' | 'walk'
-  from: { name?: string; coords?: [number, number] }
-  to: { name?: string; coords?: [number, number] }
-  etaMins?: number
-  notes?: string
-}
-
-export interface ExtraService {
-  type: 'translator' | 'private_dinner' | 'chef_table' | 'yacht_view' | 'private_event' | 'other'
-  title: string
-  description?: string
-  price?: number
-  schedule?: { date?: string; time?: string }
-  location?: { name?: string; coords?: [number, number] }
-}
+    tripTitle: string;
+  };
+  summary: Summary;
+  flights: Flight[];
+  days: DayPlan[];
+  transports: Transport[];
+  extras: Extras;
+  lights: Lights;
+};
