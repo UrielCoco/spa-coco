@@ -1,7 +1,8 @@
 // src/services/spa.ts
+export type Role = 'user' | 'assistant' | 'system';
 
 export type ChatMessage = {
-  role: 'user' | 'assistant' | 'system';
+  role: Role;
   content: string;
 };
 
@@ -9,38 +10,29 @@ export type SendSpaChatRequest = {
   messages: ChatMessage[];
 };
 
-/**
- * Llama a /api/spa-chat y devuelve el contenido de texto del assistant.
- * El endpoint puede responder:
- *  - text/plain  -> devolvemos tal cual
- *  - application/json -> intentamos leer { text } o { message }
- *  - stream deshabilitado -> acumulamos como texto
- */
-export async function sendSpaChat(payload: SendSpaChatRequest): Promise<string> {
+export type AssistantEvent =
+  | { event: 'assistant'; payload: { content: string } }
+  | { event: 'itinerary'; payload: { partial: Record<string, unknown> } };
+
+export type SendSpaChatResponse =
+  | { ok: true; events: AssistantEvent[] }
+  | { ok: false; error: string };
+
+export async function sendSpaChat(
+  body: SendSpaChatRequest,
+): Promise<AssistantEvent[]> {
   const res = await fetch('/api/spa-chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(body),
   });
 
-  // Intenta leer como texto primero (cubrir streams/edge handlers que ya devuelven texto)
-  const raw = await res.text();
+  const json = (await res.json()) as SendSpaChatResponse;
 
-  // Si no es OK, re-portamos el texto como error para que suba al UI/Logs
-  if (!res.ok) {
-    throw new Error(raw || `HTTP ${res.status}`);
+  if (!res.ok || !json || (json as any).ok === false) {
+    const msg = (json as any)?.error || `HTTP ${res.status}`;
+    throw new Error(msg);
   }
 
-  // Algunos backends envían JSON con { text: string }
-  try {
-    const maybe = JSON.parse(raw);
-    if (maybe && typeof maybe === 'object') {
-      if (typeof maybe.text === 'string') return maybe.text;
-      if (typeof maybe.message === 'string') return maybe.message;
-    }
-  } catch {
-    // no era JSON; continuar
-  }
-
-  return raw;
+  return (json as { ok: true; events: AssistantEvent[] }).events;
 }

@@ -1,85 +1,85 @@
-// src/hooks/useSpaChat.ts
-import { useCallback, useMemo, useRef, useState } from 'react';
-import { sendSpaChat, type ChatMessage, type SendSpaChatRequest } from '@/services/spa';
+import { useState, useRef, useCallback } from 'react';
+import {
+  sendSpaChat,
+  type AssistantEvent,
+  type ChatMessage,
+  type Role,
+} from '@/services/spa';
 
-export type ChatEvent = {
-  id: string;
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-  at: number;
+export type UseSpaChatOptions = {
+  /**
+   * Recibe TODOS los eventos crudos (assistant_say, upsert_itinerary, etc.)
+   * para que el consumidor aplique parciales al store, registre métricas, etc.
+   */
+  onEvents?: (events: AssistantEvent[]) => void;
 };
 
-type UseSpaChatResult = {
-  events: ChatEvent[];
-  sending: boolean;
-  error: string | null;
-  send: (text: string) => Promise<string | null>;
-  clear: () => void;
-};
-
-/**
- * Hook para manejar la conversación con /api/spa-chat.
- */
-export function useSpaChat(initialEvents: ChatEvent[] = []): UseSpaChatResult {
-  const [events, setEvents] = useState<ChatEvent[]>(initialEvents);
-  const [sending, setSending] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
-  const lastMessages = useRef<ChatMessage[]>([]);
-
-  const pushEvent = useCallback((role: ChatEvent['role'], content: string) => {
-    setEvents((prev) => [
-      ...prev,
-      { id: `${Date.now()}-${Math.random()}`, role, content, at: Date.now() },
-    ]);
-  }, []);
-
-  // Forzamos el tipo explícito a ChatMessage[]
-  const messagesForRequest: ChatMessage[] = useMemo(() => {
-    return events.map<ChatMessage>((e) => ({ role: e.role, content: e.content }));
-  }, [events]);
-
-  const send = useCallback(
-    async (text: string): Promise<string | null> => {
-      const clean = text.trim();
-      if (!clean || sending) return null;
-
-      setError(null);
-      pushEvent('user', clean);
-      setSending(true);
-
-      try {
-        // Definimos explícitamente el mensaje de usuario como ChatMessage
-        const userMsg: ChatMessage = { role: 'user', content: clean };
-
-        // Definimos explícitamente el body como SendSpaChatRequest
-        const body: SendSpaChatRequest = {
-          messages: [...messagesForRequest, userMsg],
-        };
-
-        lastMessages.current = body.messages;
-
-        const answer = await sendSpaChat(body);
-        pushEvent('assistant', answer);
-        return answer;
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        setError(msg);
-        pushEvent('assistant', `No pude contactar al backend (/api/spa-chat). ${msg}`);
-        return null;
-      } finally {
-        setSending(false);
-      }
-    },
-    [messagesForRequest, pushEvent, sending],
-  );
-
-  const clear = useCallback(() => {
-    setEvents([]);
-    setError(null);
-    lastMessages.current = [];
-  }, []);
-
-  return { events, sending, error, send, clear };
+function makeMsg(role: Role, content: string): ChatMessage {
+  // Tipamos explícitamente el mensaje para que 'role' no se ensanche a string
+  return { role, content };
 }
 
+export function useSpaChat(opts: UseSpaChatOptions = {}) {
+  const [busy, setBusy] = useState(false);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const eventsRef = useRef<AssistantEvent[]>([]);
+
+  const send = useCallback(
+    async (text: string) => {
+      const content = (text ?? '').trim();
+      if (!content || busy) return;
+
+      // 1) armamos el mensaje del usuario con tipado explícito
+      const userMsg: ChatMessage = makeMsg('user', content);
+
+      // 2) construimos el historial a enviar tipado como ChatMessage[]
+      const nextMessages: ChatMessage[] = [...messages, userMsg];
+
+      // 3) reflejamos en el estado local ANTES de llamar al backend
+      setMessages(nextMessages);
+      setBusy(true);
+
+      try {
+        const events = await sendSpaChat({ messages: nextMessages });
+
+        // guardamos para acceso externo si hace falta
+        eventsRef.current = events;
+
+        // Proyectamos SOLO los mensajes "assistant" al historial legible
+        const toAppend: ChatMessage[] = [];
+        for (const ev of events) {
+          if (ev.event === 'assistant') {
+            toAppend.push(makeMsg('assistant', ev.payload.content));
+          }
+        }
+        if (toAppend.length) {
+          setMessages((cur) => [...cur, ...toAppend]);
+        }
+
+        // Permitimos que el consumidor aplique parciales al store del itinerario
+        if (opts.onEvents) opts.onEvents(events);
+
+        return events;
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy, messages, opts],
+  );
+
+  const reset = useCallback(() => {
+    setMessages([]);
+    eventsRef.current = [];
+  }, []);
+
+  return {
+    busy,
+    messages,             // ChatMessage[]
+    send,                 // (text: string) => Promise<AssistantEvent[] | void>
+    lastEvents: eventsRef.current,
+    reset,
+  };
+}
+
+export type UseSpaChatReturn = ReturnType<typeof useSpaChat>;
 export default useSpaChat;
