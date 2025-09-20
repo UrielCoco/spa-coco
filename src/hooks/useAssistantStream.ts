@@ -32,17 +32,15 @@ export function useAssistantStream(): UseAssistantStream {
   const { addEvent } = useAssistantDebug()
   const tap = useCallback(
     (kind: any, data?: any, runId?: string, threadId?: string) => {
-      try {
-        addEvent({ kind: kind as any, data, runId, threadId })
-      } catch (e) {
-        console.warn('[assistantDebug] tap failed:', e)
-      }
+      try { addEvent({ kind: kind as any, data, runId, threadId }) }
+      catch (e) { console.warn('[assistantDebug] tap failed:', e) }
     },
     [addEvent]
   )
 
-  const parseSSE = (buf: string): { event: string; data: any }[] => {
-    const out: { event: string; data: any }[] = []
+  // ============ helpers de parseo ============
+  const parseSSE = (buf: string): { event: string; data: any; raw: string }[] => {
+    const out: { event: string; data: any; raw: string }[] = []
     const blocks = buf.split('\n\n')
     for (const block of blocks) {
       if (!block.trim()) continue
@@ -54,18 +52,13 @@ export function useAssistantStream(): UseAssistantStream {
       }
       const dataStr = dataLines.join('\n')
       if (!dataStr) continue
-      try { out.push({ event, data: JSON.parse(dataStr) }) }
-      catch { out.push({ event, data: { value: dataStr } }) }
+      try { out.push({ event, data: JSON.parse(dataStr), raw: block }) }
+      catch { out.push({ event, data: { value: dataStr }, raw: block }) }
     }
     return out
   }
 
-  // ============ 🔎 Extractores tolerantes ======================
   function extractTextChunk(data: any): string {
-    // muchos backends mandan en distintos campos:
-    // - data.value, data.text, data.delta
-    // - data.output_text (OpenAI responses API)
-    // - data.content[0].text.value (Assistants/messages)
     const candidates = [
       data?.value,
       data?.text,
@@ -86,21 +79,24 @@ export function useAssistantStream(): UseAssistantStream {
   }
 
   function extractFinalText(data: any): string {
-    // para eventos “completed/done” que traen el texto completo
     const whole =
       data?.text ??
       data?.value ??
       data?.output_text ??
-      data?.output?.map((o: any) =>
-        o?.content?.map((p: any) => p?.text?.value || '').join('')
-      ).join('') ??
-      data?.content?.map((p: any) => p?.text?.value || '').join('') ??
+      (Array.isArray(data?.output)
+        ? data.output.map((o: any) =>
+            (Array.isArray(o?.content) ? o.content : []).map((p: any) => p?.text?.value || '').join('')
+          ).join('')
+        : '') ??
+      (Array.isArray(data?.content)
+        ? data.content.map((p: any) => p?.text?.value || '').join('')
+        : '') ??
       ''
     return typeof whole === 'string' ? whole : ''
   }
-  // =============================================================
+  // ===========================================
 
-  // BASE=/api (tu var en Vercel) → componemos /spa-chat
+  // BASE=/api y componemos /spa-chat (match de tu proxy/vars)
   const BASE = (import.meta.env.VITE_ASSISTANT_BASE_URL as string) || '/api'
   const ENDPOINT = `${BASE.replace(/\/$/, '')}/spa-chat`
 
@@ -119,6 +115,57 @@ export function useAssistantStream(): UseAssistantStream {
       body: JSON.stringify(payload),
     })
 
+    const ct = res.headers.get('content-type') || ''
+
+    // ---------- MODO JSON (sin SSE) ----------
+    if (!ct.includes('text/event-stream')) {
+      // Si no es SSE, intentamos JSON completo
+      let bodyText = ''
+      try {
+        bodyText = await res.text()
+        // Log completo de respuesta JSON
+        tap('response.json.raw', safeParseMaybe(bodyText))
+      } catch (e) {
+        tap('error', { message: 'No se pudo leer JSON', error: String(e) })
+      }
+
+      if (!res.ok) {
+        cb?.onError?.({ status: res.status, message: `HTTP ${res.status}` })
+        tap('error', { status: res.status, message: `HTTP ${res.status}` })
+        return
+      }
+
+      // Intentamos encontrar el texto del assistant en distintas llaves
+      try {
+        const json = JSON.parse(bodyText || '{}')
+        const text =
+          json?.message?.content ??
+          json?.assistantText ??
+          json?.text ??
+          json?.choices?.[0]?.message?.content ??
+          ''
+
+        if (text) {
+          cb?.ensureAssistantPlaceholder?.()
+          cb?.appendAssistantText?.(text)
+          cb?.finalizeAssistantMessage?.(text)
+          cb?.onDone?.(text)
+          tap('response.completed', { mode: 'json', length: text.length })
+        } else {
+          cb?.onDone?.('')
+          tap('response.completed', { mode: 'json', length: 0 })
+        }
+      } catch {
+        cb?.onDone?.('')
+        tap('response.completed', { mode: 'json-parse-error' })
+      } finally {
+        readingRef.current = false
+        force()
+      }
+      return
+    }
+
+    // ---------- MODO SSE ----------
     if (!res.ok || !res.body) {
       const err = { status: res.status, message: `HTTP ${res.status}` }
       tap('error', err)
@@ -134,7 +181,7 @@ export function useAssistantStream(): UseAssistantStream {
     const toolBuf: Record<string, { name?: string; args: string }> = {}
     let createdPlaceholder = false
     let gotAnyText = false
-    let builtText = '' // acumulador “universal” (por si no llegan deltas clásicos)
+    let builtText = ''
 
     const ensurePlaceholder = () => {
       if (createdPlaceholder) return
@@ -146,7 +193,11 @@ export function useAssistantStream(): UseAssistantStream {
       while (true) {
         const { value, done } = await reader.read()
         if (done) break
-        buffer += decoder.decode(value, { stream: true })
+        const chunkStr = decoder.decode(value, { stream: true })
+        buffer += chunkStr
+
+        // Log crudo del chunk SSE (útil para diagnóstico)
+        tap('sse.chunk', { raw: chunkStr })
 
         const end = buffer.lastIndexOf('\n\n')
         if (end < 0) continue
@@ -154,6 +205,9 @@ export function useAssistantStream(): UseAssistantStream {
         buffer = buffer.slice(end + 2)
 
         const evs = parseSSE(chunk)
+        // Log de bloques parseados (cada bloque)
+        tap('sse.parsed', { blocks: evs.map(({ event, data }) => ({ event, data })) })
+
         for (const { event, data } of evs) {
           const mapped =
             event === 'delta' ? 'response.delta'
@@ -164,19 +218,16 @@ export function useAssistantStream(): UseAssistantStream {
           tap(mapped, { ...data, _event: event }, data?.run_id, data?.thread_id)
 
           switch (event) {
-            // === Texto tipo “clásico” ===
             case 'delta': {
               const val = String(data?.value ?? '')
               if (!val) break
               gotAnyText = true
               builtText += val
-              cb?.onDelta?.(val)
               ensurePlaceholder()
               cb?.appendAssistantText?.(val)
               break
             }
 
-            // === Texto en Responses API ===
             case 'response.output_text.delta':
             case 'message.delta': {
               const val = extractTextChunk(data)
@@ -188,7 +239,6 @@ export function useAssistantStream(): UseAssistantStream {
               break
             }
 
-            // === Cierre de texto en Responses/Assistants ===
             case 'response.output_text.done':
             case 'message.completed': {
               const final = extractFinalText(data) || builtText
@@ -200,7 +250,6 @@ export function useAssistantStream(): UseAssistantStream {
               break
             }
 
-            // === Herramientas ===
             case 'tool_call.arguments.delta': {
               const id: string = data?.id ?? 'unknown'
               const name: string | undefined = data?.name
@@ -211,6 +260,7 @@ export function useAssistantStream(): UseAssistantStream {
               cb?.onToolDelta?.(id, b.name, d)
               break
             }
+
             case 'tool_call.completed': {
               const id: string = data?.id ?? 'unknown'
               const name: string | undefined = data?.name
@@ -223,10 +273,8 @@ export function useAssistantStream(): UseAssistantStream {
               break
             }
 
-            // === Fin del stream ===
             case 'done':
             case 'response.completed': {
-              // algunos backends mandan {} aquí; si ya acumulamos texto, lo cerramos
               const final = extractFinalText(data) || builtText
               cb?.onDone?.(final)
               if (final) {
@@ -236,13 +284,11 @@ export function useAssistantStream(): UseAssistantStream {
               break
             }
 
-            // === Errores ===
             case 'error': {
               cb?.onError?.(data)
               break
             }
 
-            // === Cualquier otro evento con posible texto ===
             default: {
               const val = extractTextChunk(data)
               if (val) {
@@ -263,10 +309,18 @@ export function useAssistantStream(): UseAssistantStream {
     } finally {
       readingRef.current = false
       if (!gotAnyText) cb?.onDone?.('')
-      tap('response.completed', {})
+      tap('response.completed', { mode: 'sse', gotAnyText })
       force()
     }
   }
 
   return { start }
+}
+
+function safeParseMaybe(text: string) {
+  try {
+    return { ok: true, json: JSON.parse(text) }
+  } catch {
+    return { ok: false, text }
+  }
 }
