@@ -38,7 +38,7 @@ export function useAssistantStream(): UseAssistantStream {
     [addEvent]
   )
 
-  // ============ helpers de parseo ============
+  // ======== helpers de parseo SSE y extracción de texto ========
   const parseSSE = (buf: string): { event: string; data: any; raw: string }[] => {
     const out: { event: string; data: any; raw: string }[] = []
     const blocks = buf.split('\n\n')
@@ -94,9 +94,9 @@ export function useAssistantStream(): UseAssistantStream {
       ''
     return typeof whole === 'string' ? whole : ''
   }
-  // ===========================================
+  // =============================================================
 
-  // BASE=/api y componemos /spa-chat (match de tu proxy/vars)
+  // BASE=/api (tu var en Vercel) → componemos /spa-chat
   const BASE = (import.meta.env.VITE_ASSISTANT_BASE_URL as string) || '/api'
   const ENDPOINT = `${BASE.replace(/\/$/, '')}/spa-chat`
 
@@ -119,45 +119,56 @@ export function useAssistantStream(): UseAssistantStream {
 
     // ---------- MODO JSON (sin SSE) ----------
     if (!ct.includes('text/event-stream')) {
-      // Si no es SSE, intentamos JSON completo
       let bodyText = ''
       try {
         bodyText = await res.text()
-        // Log completo de respuesta JSON
+        // 🔎 Log completo de respuesta JSON (tal cual llega)
         tap('response.json.raw', safeParseMaybe(bodyText))
       } catch (e) {
         tap('error', { message: 'No se pudo leer JSON', error: String(e) })
       }
 
       if (!res.ok) {
-        cb?.onError?.({ status: res.status, message: `HTTP ${res.status}` })
-        tap('error', { status: res.status, message: `HTTP ${res.status}` })
+        const err = { status: res.status, message: `HTTP ${res.status}` }
+        tap('error', err)
+        cb?.onError?.(err)
+        readingRef.current = false
+        force()
         return
       }
 
-      // Intentamos encontrar el texto del assistant en distintas llaves
+      // 🔧 Aquí está el FIX importante:
+      // intentamos texto en varias llaves, PRIORIDAD: json.message.content (lo que ya viste en logs)
       try {
         const json = JSON.parse(bodyText || '{}')
+
         const text =
+          // 1) tu forma actual de backend (message.content)
           json?.message?.content ??
+          json?.json?.message?.content ?? // por si viene anidado en "json"
+          // 2) campos alternos que podrías usar en otros endpoints
           json?.assistantText ??
           json?.text ??
           json?.choices?.[0]?.message?.content ??
+          // 3) string directo
+          (typeof json === 'string' ? json : '') ??
           ''
 
-        if (text) {
-          cb?.ensureAssistantPlaceholder?.()
+        cb?.ensureAssistantPlaceholder?.()
+
+        if (text && typeof text === 'string') {
           cb?.appendAssistantText?.(text)
           cb?.finalizeAssistantMessage?.(text)
           cb?.onDone?.(text)
           tap('response.completed', { mode: 'json', length: text.length })
         } else {
-          cb?.onDone?.('')
+          // No hubo texto directo: registramos para diagnóstico y cerramos vacío
           tap('response.completed', { mode: 'json', length: 0 })
+          cb?.onDone?.('')
         }
-      } catch {
+      } catch (e) {
+        tap('error', { message: 'JSON parse error', error: String(e) })
         cb?.onDone?.('')
-        tap('response.completed', { mode: 'json-parse-error' })
       } finally {
         readingRef.current = false
         force()
@@ -196,7 +207,7 @@ export function useAssistantStream(): UseAssistantStream {
         const chunkStr = decoder.decode(value, { stream: true })
         buffer += chunkStr
 
-        // Log crudo del chunk SSE (útil para diagnóstico)
+        // 🧩 Log crudo del chunk SSE (útil para diagnóstico)
         tap('sse.chunk', { raw: chunkStr })
 
         const end = buffer.lastIndexOf('\n\n')
@@ -205,7 +216,7 @@ export function useAssistantStream(): UseAssistantStream {
         buffer = buffer.slice(end + 2)
 
         const evs = parseSSE(chunk)
-        // Log de bloques parseados (cada bloque)
+        // 🧭 Log de bloques parseados (por evento)
         tap('sse.parsed', { blocks: evs.map(({ event, data }) => ({ event, data })) })
 
         for (const { event, data } of evs) {
