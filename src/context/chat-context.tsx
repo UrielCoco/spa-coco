@@ -1,8 +1,8 @@
-// src/context/chat-context.ts
+
 "use client";
 
 import { createContext, useContext, useState, ReactNode } from "react";
-import { UIMessage } from "@/types";
+import { UIMessage } from "@/types/itinerary";
 
 type ChatContextType = {
   messages: UIMessage[];
@@ -23,10 +23,10 @@ export const ChatProvider: React.FC<ChatProviderProps> = ({ children }) => {
     setMessages((prev) => [...prev, message]);
   };
 
-  return (
-    <ChatContext.Provider value={{ messages, setMessages, appendMessage }}>
-      {children}
-    </ChatContext.Provider>
+return (
+  <ChatContext.Provider value={{ messages, setMessages, appendMessage }}>
+    {children}
+  </ChatContext.Provider>
   );
 };
 
