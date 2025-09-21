@@ -58,3 +58,15 @@ export type Itinerary = {
   extras: Extras;
   lights: Lights;
 };
+export interface UIMessagePart {
+  type: 'text' | 'tool-call';
+  text?: string;
+  toolCallId?: string;
+  args?: string;
+};
+
+export interface UIMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  parts: UIMessagePart[];
+};

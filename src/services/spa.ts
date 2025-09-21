@@ -1,40 +1,35 @@
 // src/services/spa.ts
-export type ChatRole = "user" | "assistant" | "system";
-export type ChatMessage = { role: ChatRole; content: string };
+import type { UIMessage } from '@/types/itinerary';
 
-export type SendSpaChatRequest = { messages: ChatMessage[] };
-export type SendSpaChatSuccess = { ok: true; message: ChatMessage; usage?: any };
-export type SendSpaChatError = { ok: false; error: string };
-export type SendSpaChatResponse = SendSpaChatSuccess | SendSpaChatError;
+type StreamSpaChatOptions = {
+  messages: UIMessage[];
+  onText: (chunk: string) => void;
+  onToolCall?: (toolCall: any) => void;
+  signal?: AbortSignal;
+};
 
-export async function sendSpaChat(
-  messages: ChatMessage[],
-  opts?: { signal?: AbortSignal }
-): Promise<SendSpaChatSuccess> {
-  const res = await fetch("/api/spa-chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ messages } satisfies SendSpaChatRequest),
-    signal: opts?.signal,
-    cache: "no-store",
+export async function streamSpaChat({
+  messages,
+  onText,
+  onToolCall,
+  signal,
+}: StreamSpaChatOptions) {
+  const res = await fetch('/api/spa-chat', {
+    method: 'POST',
+    body: JSON.stringify({ messages }),
+    headers: { 'Content-Type': 'application/json' },
+    signal,
   });
 
-  const text = await res.text();
-  let json: SendSpaChatResponse;
+  if (!res.body) throw new Error('No stream body');
 
-  try {
-    json = JSON.parse(text);
-  } catch {
-    console.error("[sendSpaChat] Bad JSON from /api/spa-chat:", text);
-    throw new Error(`Bad JSON from /api/spa-chat: ${text}`);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const text = decoder.decode(value);
+    onText(text); // Streamea al frontend
   }
-
-  if (!res.ok || !json.ok) {
-    const msg =
-      (json as SendSpaChatError)?.error ?? `HTTP ${res.status}: ${res.statusText}`;
-    console.error("[sendSpaChat] Error:", msg);
-    throw new Error(msg);
-  }
-
-  return json as SendSpaChatSuccess;
 }
